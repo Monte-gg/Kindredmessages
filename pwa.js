@@ -36,11 +36,22 @@
       });
   }
 
-  applyUpdateButton.addEventListener("click", () => {
-    if (!waitingWorker) return;
-    applyingUpdate = true;
-    applyUpdateButton.disabled = true;
-    waitingWorker.postMessage({ type: "SKIP_WAITING" });
+  applyUpdateButton.addEventListener("click", async () => {
+    try {
+      const registration = await navigator.serviceWorker.getRegistration();
+      waitingWorker = registration?.waiting || waitingWorker;
+      if (!waitingWorker) {
+        updateBanner.hidden = true;
+        return;
+      }
+      applyingUpdate = true;
+      applyUpdateButton.disabled = true;
+      waitingWorker.postMessage({ type: "SKIP_WAITING" });
+    } catch (error) {
+      applyingUpdate = false;
+      applyUpdateButton.disabled = false;
+      console.error("Kindred couldn't apply the waiting app update.", error);
+    }
   });
 
   dismissUpdateButton.addEventListener("click", () => {
