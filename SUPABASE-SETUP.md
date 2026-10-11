@@ -105,6 +105,10 @@ are never sent to the website.
 5. Publish the updated website and reload it. Both people in the call must use
    the updated website. If the relay is unavailable or not configured, Kindred
    warns you and tries a direct call; restrictive networks may still fail.
+   If the function URL responds with `Requested function was not found`, the
+   function has not been deployed yet. A `503` from the function means one or
+   both Cloudflare secrets are missing. Once deployed and configured, a signed
+   in call should receive temporary `turn:` and `turns:` ICE servers.
 
 TURN improves call reachability but cannot guarantee a call through every
 firewall, provider, or device. Cloudflare charges for TURN traffic when it is

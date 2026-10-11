@@ -901,7 +901,9 @@
     window.clearTimeout(call.connectionTimeout);
     call.connectionTimeout = window.setTimeout(() => {
       if (activeCall !== call || call.connected || call.peer?.connectionState === "connected") return;
-      showToast("The call couldn't connect. Your network may need a TURN relay.");
+      showToast(call.turnUnavailableReason === "not-deployed"
+        ? "This call needs the TURN relay, but it isn't deployed in Supabase yet. Calls may work on the same Wi-Fi; mobile data needs the relay."
+        : "The call couldn't connect on this network. Check mobile-data coverage, call permissions, and TURN relay setup.");
       endCall(true, "missed").catch((error) => console.error("The unconnected call couldn't be closed.", error));
     }, 60000);
   }
@@ -996,7 +998,10 @@
     } catch (error) {
       console.error("Kindred couldn't get temporary TURN credentials.", error);
       call.turnIceServers = [];
-      showToast("TURN relay is unavailable. Trying a direct call; some networks may not connect.");
+      call.turnUnavailableReason = error?.context?.status === 404 ? "not-deployed" : "unavailable";
+      showToast(call.turnUnavailableReason === "not-deployed"
+        ? "TURN relay isn't deployed in Supabase yet. Trying a direct call; calls on mobile data or restrictive networks may fail."
+        : "TURN relay is unavailable. Trying a direct call; calls on mobile data or restrictive networks may fail.");
     }
     return call.turnIceServers;
   }
@@ -1065,7 +1070,9 @@
           }
         }, 20000);
       } else if (peer.connectionState === "failed") {
-        showToast("The call couldn't connect. Your network may need a TURN relay.");
+        showToast(call.turnUnavailableReason === "not-deployed"
+          ? "This call needs the TURN relay, but it isn't deployed in Supabase yet. Calls may work on the same Wi-Fi; mobile data needs the relay."
+          : "The call couldn't connect on this network. Check mobile-data coverage, call permissions, and TURN relay setup.");
         endCall(true, call.connected ? "ended" : "missed")
           .catch((error) => console.error("The audio call could not be closed cleanly.", error));
       }
