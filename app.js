@@ -697,28 +697,36 @@
     if (error) throw error;
   }
 
-  function sendCallSignal(event, payload = {}) {
-    if (!callRoomChannel) throw new Error("The call connection is not ready.");
-    return callRoomChannel.send({
-      type: "broadcast",
+  async function sendCallSignal(event, payload = {}) {
+    if (!callRoomChannel || !activeCall) throw new Error("The call connection is not ready.");
+    const { error } = await supabaseClient.from("kindred_call_signals").insert({
+      call_id: activeCall.id,
+      sender_id: currentUserId,
       event,
-      payload: { ...payload, call_id: activeCall?.id, user_id: currentUserId },
+      payload,
     });
+    if (error) throw error;
+    return "ok";
   }
 
   function createCallRoom(callId) {
-    const channel = supabaseClient.channel(`kindred-call-room:${callId}`, {
-      config: { private: true },
-    });
+    const channel = supabaseClient.channel(`kindred-call-signals:${callId}`);
     callRoomChannel = channel;
-    ["ready", "offer", "answer", "ice", "declined", "ended"].forEach((event) => {
-      channel.on("broadcast", { event }, ({ payload }) => {
-        if (!activeCall || activeCall.id !== payload?.call_id || payload.user_id === currentUserId) return;
-        handleCallSignal(event, payload).catch((error) => {
-          console.error("Kindred audio call signaling failed.", error);
-          showToast(error.message || "The call couldn't connect.");
-          endCall(true).catch((endError) => console.error("The audio call could not be closed cleanly.", endError));
-        });
+    channel.on("postgres_changes", {
+      event: "INSERT",
+      schema: "public",
+      table: "kindred_call_signals",
+      filter: `call_id=eq.${callId}`,
+    }, ({ new: signal }) => {
+      if (!activeCall || activeCall.id !== signal.call_id || signal.sender_id === currentUserId) return;
+      handleCallSignal(signal.event, {
+        ...signal.payload,
+        call_id: signal.call_id,
+        user_id: signal.sender_id,
+      }).catch((error) => {
+        console.error("Kindred audio call signaling failed.", error);
+        showToast(error.message || "The call couldn't connect.");
+        endCall(true).catch((endError) => console.error("The audio call could not be closed cleanly.", endError));
       });
     });
     return channel;
@@ -816,10 +824,10 @@
   }
 
   async function handleIncomingCall(payload) {
-    if (!payload || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(payload.call_id || "")) return;
+    if (!payload || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(payload.id || "")) return;
     const { data: call, error } = await supabaseClient.from("kindred_calls")
       .select("id,caller_id,callee_id,status")
-      .eq("id", payload.call_id)
+      .eq("id", payload.id)
       .maybeSingle();
     if (error) {
       console.error("An incoming audio call couldn't be checked.", error);
@@ -827,21 +835,19 @@
     }
     if (!call || call.callee_id !== currentUserId || call.status !== "ringing") return;
     if (activeCall) {
-      await supabaseClient.from("kindred_calls").update({ status: "declined" }).eq("id", call.id);
-      const busyChannel = supabaseClient.channel(`kindred-call-room:${call.id}`, {
-        config: { private: true },
+      const { error: signalError } = await supabaseClient.from("kindred_call_signals").insert({
+        call_id: call.id,
+        sender_id: currentUserId,
+        event: "declined",
+        payload: {},
       });
-      try {
-        await subscribeRealtimeChannel(busyChannel);
-        await busyChannel.send({
-          type: "broadcast",
-          event: "declined",
-          payload: { call_id: call.id, user_id: currentUserId },
-        });
-      } catch (error) {
+      const { error: statusError } = await supabaseClient.from("kindred_calls")
+        .update({ status: "declined" })
+        .eq("id", call.id);
+      if (signalError || statusError) {
+        const error = signalError || statusError;
         console.error("A busy response couldn't be sent to the caller.", error);
-      } finally {
-        await supabaseClient.removeChannel(busyChannel);
+        showToast(error.message || "The incoming call couldn't be declined.");
       }
       return;
     }
@@ -874,12 +880,16 @@
   async function startCallInbox() {
     if (!currentUserId) return;
     if (callInboxChannel) await supabaseClient.removeChannel(callInboxChannel);
-    const channel = supabaseClient.channel(`kindred-call-inbox:${currentUserId}`, {
-      config: { private: true },
-    });
+    const channel = supabaseClient.channel(`kindred-call-inbox:${currentUserId}`);
     callInboxChannel = channel;
-    channel.on("broadcast", { event: "invite" }, ({ payload }) => {
-      handleIncomingCall(payload).catch((error) => {
+    channel.on("postgres_changes", {
+      event: "INSERT",
+      schema: "public",
+      table: "kindred_calls",
+      filter: `callee_id=eq.${currentUserId}`,
+    }, ({ new: call }) => {
+      if (!call || call.status !== "ringing") return;
+      handleIncomingCall(call).catch((error) => {
         console.error("The incoming call couldn't be handled.", error);
         showToast(error.message || "An incoming call couldn't be opened.");
       });
@@ -912,17 +922,6 @@
       const room = createCallRoom(callId);
       setCallScreen(profile, "Calling…");
       await subscribeRealtimeChannel(room);
-      const inbox = supabaseClient.channel(`kindred-call-inbox:${profile.user_id}`, {
-        config: { private: true },
-      });
-      await subscribeRealtimeChannel(inbox);
-      const status = await inbox.send({
-        type: "broadcast",
-        event: "invite",
-        payload: { call_id: callId },
-      });
-      await supabaseClient.removeChannel(inbox);
-      if (status !== "ok") throw new Error("The call invitation couldn't be sent.");
       activeCall.ringTimeout = window.setTimeout(() => {
         if (activeCall?.id !== callId) return;
         showToast(`${profile.username} didn't answer.`);
@@ -967,20 +966,23 @@
   async function endCall(notifyPeer = true, status = "ended") {
     const call = activeCall;
     if (!call) return;
-    activeCall = null;
     window.clearTimeout(call.ringTimeout);
     window.clearTimeout(call.connectionTimeout);
     if (notifyPeer && callRoomChannel) {
       try {
-        await callRoomChannel.send({
-          type: "broadcast",
+        const { error } = await supabaseClient.from("kindred_call_signals").insert({
+          call_id: call.id,
+          sender_id: currentUserId,
           event: status === "declined" ? "declined" : "ended",
-          payload: { call_id: call.id, user_id: currentUserId },
+          payload: {},
         });
+        if (error) throw error;
       } catch (error) {
         console.error("The call ending couldn't be sent to the other person.", error);
+        showToast("The call ended here, but the other person might not be notified.");
       }
     }
+    activeCall = null;
     if (call.stream) call.stream.getTracks().forEach((track) => track.stop());
     if (call.peer) call.peer.close();
     els.callRemoteAudio.srcObject = null;
@@ -991,6 +993,13 @@
       await supabaseClient.removeChannel(channel);
     }
     if (currentUserId) {
+      const { error: signalDeleteError } = await supabaseClient.from("kindred_call_signals")
+        .delete()
+        .eq("call_id", call.id);
+      if (signalDeleteError) {
+        console.error("Call signaling data couldn't be removed.", signalDeleteError);
+        showToast("The call ended, but its temporary signaling data couldn't be removed.");
+      }
       const { error } = await supabaseClient.from("kindred_calls")
         .update({ status })
         .eq("id", call.id);

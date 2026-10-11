@@ -105,12 +105,26 @@ create table if not exists public.kindred_calls (
   check (caller_id <> callee_id)
 );
 
+create table if not exists public.kindred_call_signals (
+  id bigint generated always as identity primary key,
+  call_id uuid not null references public.kindred_calls(id) on delete cascade,
+  sender_id uuid not null references auth.users(id) on delete cascade,
+  event text not null check (event in ('ready', 'offer', 'answer', 'ice', 'declined', 'ended')),
+  payload jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  constraint kindred_call_signal_payload_size check (pg_catalog.pg_column_size(payload) <= 65536)
+);
+
+create index if not exists kindred_call_signals_call_id_idx
+  on public.kindred_call_signals (call_id, id);
+
 alter table public.profiles enable row level security;
 alter table public.conversations enable row level security;
 alter table public.conversation_members enable row level security;
 alter table public.friend_requests enable row level security;
 alter table public.messages enable row level security;
 alter table public.kindred_calls enable row level security;
+alter table public.kindred_call_signals enable row level security;
 
 drop policy if exists "Users can view their own profile" on public.profiles;
 drop policy if exists "Authenticated users can view member directory" on public.profiles;
@@ -247,51 +261,38 @@ create policy "Call participants can delete call records"
   on public.kindred_calls for delete to authenticated
   using (caller_id = (select auth.uid()) or callee_id = (select auth.uid()));
 
-drop policy if exists "Members can receive Kindred call signals" on realtime.messages;
-create policy "Members can receive Kindred call signals"
-  on realtime.messages for select to authenticated
+drop policy if exists "Call participants can read call signals" on public.kindred_call_signals;
+create policy "Call participants can read call signals"
+  on public.kindred_call_signals for select to authenticated
   using (
-    case
-      when realtime.topic() like 'kindred-call-inbox:%' then
-        pg_catalog.split_part(realtime.topic(), ':', 2) = (select auth.uid())::text
-        or exists (
-          select 1 from public.kindred_calls as call
-          where call.callee_id::text = pg_catalog.split_part(realtime.topic(), ':', 2)
-            and call.caller_id = (select auth.uid())
-            and call.status = 'ringing'
-            and call.created_at > now() - interval '1 minute'
-        )
-      when realtime.topic() like 'kindred-call-room:%' then
-        exists (
-          select 1 from public.kindred_calls as call
-          where call.id::text = pg_catalog.split_part(realtime.topic(), ':', 2)
-            and (call.caller_id = (select auth.uid()) or call.callee_id = (select auth.uid()))
-        )
-      else false
-    end
+    exists (
+      select 1 from public.kindred_calls as call
+      where call.id = call_id
+        and (call.caller_id = (select auth.uid()) or call.callee_id = (select auth.uid()))
+    )
   );
 
-drop policy if exists "Members can send Kindred call signals" on realtime.messages;
-create policy "Members can send Kindred call signals"
-  on realtime.messages for insert to authenticated
+drop policy if exists "Call participants can send their own signals" on public.kindred_call_signals;
+create policy "Call participants can send their own signals"
+  on public.kindred_call_signals for insert to authenticated
   with check (
-    case
-      when realtime.topic() like 'kindred-call-inbox:%' then
-        exists (
-          select 1 from public.kindred_calls as call
-          where call.id::text = payload ->> 'call_id'
-            and call.callee_id::text = pg_catalog.split_part(realtime.topic(), ':', 2)
-            and call.caller_id = (select auth.uid())
-            and call.status = 'ringing'
-        )
-      when realtime.topic() like 'kindred-call-room:%' then
-        exists (
-          select 1 from public.kindred_calls as call
-          where call.id::text = pg_catalog.split_part(realtime.topic(), ':', 2)
-            and (call.caller_id = (select auth.uid()) or call.callee_id = (select auth.uid()))
-        )
-      else false
-    end
+    sender_id = (select auth.uid())
+    and exists (
+      select 1 from public.kindred_calls as call
+      where call.id = call_id
+        and (call.caller_id = (select auth.uid()) or call.callee_id = (select auth.uid()))
+    )
+  );
+
+drop policy if exists "Call participants can clear call signals" on public.kindred_call_signals;
+create policy "Call participants can clear call signals"
+  on public.kindred_call_signals for delete to authenticated
+  using (
+    exists (
+      select 1 from public.kindred_calls as call
+      where call.id = call_id
+        and (call.caller_id = (select auth.uid()) or call.callee_id = (select auth.uid()))
+    )
   );
 
 drop policy if exists "Members can view their friend requests" on public.friend_requests;
@@ -502,6 +503,7 @@ grant execute on function public.create_direct_conversation(uuid) to authenticat
 
 grant select on table public.conversations, public.conversation_members, public.messages to authenticated;
 grant select, update (status), delete on table public.kindred_calls to authenticated;
+grant select, insert, delete on table public.kindred_call_signals to authenticated;
 grant insert on table public.messages to authenticated;
 grant delete on table public.messages to authenticated;
 grant usage, select on sequence public.messages_id_seq to authenticated;
@@ -510,6 +512,7 @@ grant select on table public.conversations, public.conversation_members to authe
 grant update (last_read_at) on table public.conversation_members to authenticated;
 revoke all on table public.messages from anon, authenticated;
 grant select, insert, delete on table public.messages to authenticated;
+grant usage, select on sequence public.kindred_call_signals_id_seq to authenticated;
 revoke all on table public.friend_requests from anon, authenticated;
 grant select on table public.friend_requests to authenticated;
 
@@ -619,6 +622,24 @@ begin
       and tablename = 'conversation_members'
   ) then
     alter publication supabase_realtime add table public.conversation_members;
+  end if;
+  if not exists (
+    select 1
+    from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'kindred_calls'
+  ) then
+    alter publication supabase_realtime add table public.kindred_calls;
+  end if;
+  if not exists (
+    select 1
+    from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'kindred_call_signals'
+  ) then
+    alter publication supabase_realtime add table public.kindred_call_signals;
   end if;
 end;
 $$;

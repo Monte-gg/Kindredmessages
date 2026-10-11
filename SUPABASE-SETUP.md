@@ -69,7 +69,9 @@ signed-in members. Open a member profile from the People list or a conversation
 header. Audio calls use browser microphone permission, Supabase Realtime for
 private call signaling, and a peer-to-peer WebRTC audio connection. Both people
 need to be online in Kindred and allow microphone access; calls require HTTPS
-and may not connect on networks that block direct peer-to-peer traffic.
+and may not connect on networks that block direct peer-to-peer traffic. Call
+invites and WebRTC signaling use participant-restricted database tables and
+Supabase Realtime; the schema adds those tables to the Realtime publication.
 
 ## Install Kindred like an app
 
