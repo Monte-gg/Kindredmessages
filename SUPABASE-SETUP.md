@@ -68,12 +68,18 @@ remove pictures under their own user ID folder.
 
 Kindred includes a web app manifest and service worker. To install it, first
 publish the site over HTTPS; opening `index.html` directly from your computer
-does not support app installation. For a simple no-build deployment, use
-[Netlify Drop](https://app.netlify.com/drop): sign in, drag the project folder
-containing `index.html`, `app.js`, `styles.css`, and `supabase-config.js` onto
-the page, and open the HTTPS address Netlify gives you. Keep
-`supabase-config.js` with the site; it contains the browser-safe publishable
-key, never a service-role secret.
+does not support app installation. This repository deploys to GitHub Pages
+automatically when changes are pushed to `main`. To enable it, open the
+repository's **Settings > Pages**, set **Build and deployment > Source** to
+**GitHub Actions**, then wait for the Pages deployment in the **Actions** tab
+to finish. The site address is
+<https://monte-gg.github.io/Kindredmessages/>.
+
+In the Supabase dashboard, open **Authentication > URL Configuration** and add
+`https://monte-gg.github.io/Kindredmessages/` to the allowed redirect URLs so
+password recovery can return to the app. Keep `supabase-config.js` with the
+site; it contains the browser-safe publishable key, never a service-role
+secret.
 
 On desktop Chrome or Edge, choose **Install Kindred** when the button appears,
 or use the browser's install option. On iPhone or iPad, open the HTTPS address
