@@ -41,73 +41,56 @@ Deno.serve(async (request) => {
     return jsonResponse({ error: "Your sign-in has expired. Sign in again to make a call." }, 401);
   }
 
-  const turnKeyId = Deno.env.get("CLOUDFLARE_TURN_KEY_ID");
-  const cloudflareApiToken = Deno.env.get("CLOUDFLARE_API_TOKEN");
-  if (!turnKeyId || !cloudflareApiToken) {
-    console.error("Cloudflare TURN credentials are not configured in Supabase secrets.");
+  let user: { id?: unknown };
+  try {
+    user = await authResponse.json();
+  } catch (error) {
+    console.error("Supabase returned invalid authenticated-user data.", error);
+    return jsonResponse({ error: "Your sign-in could not be verified. Try again." }, 502);
+  }
+  if (typeof user.id !== "string" || !/^[0-9a-f-]{36}$/i.test(user.id)) {
+    console.error("Supabase authenticated-user response did not include a valid user ID.");
+    return jsonResponse({ error: "Your sign-in could not be verified. Try again." }, 502);
+  }
+
+  const turnHost = Deno.env.get("TURN_HOST")?.trim().toLowerCase();
+  const sharedSecret = Deno.env.get("TURN_SHARED_SECRET");
+  if (
+    !turnHost
+    || !/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/.test(turnHost)
+    || !sharedSecret
+  ) {
+    console.error("Self-hosted TURN relay settings are missing or invalid in Supabase secrets.");
     return jsonResponse({ error: "The call relay has not been configured yet." }, 503);
   }
 
-  let relayResponse: Response;
+  const expiresAt = Math.floor(Date.now() / 1000) + 86400;
+  const username = `${expiresAt}:${user.id}`;
+  let credential: string;
   try {
-    relayResponse = await fetch(
-      `https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(turnKeyId)}/credentials/generate-ice-servers`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${cloudflareApiToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ ttl: 86400 }),
-        signal: AbortSignal.timeout(10000),
-      },
+    const key = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(sharedSecret),
+      { name: "HMAC", hash: "SHA-1" },
+      false,
+      ["sign"],
     );
+    const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(username));
+    credential = btoa(String.fromCharCode(...new Uint8Array(signature)));
   } catch (error) {
-    console.error("Cloudflare TURN credential request failed.", error);
-    return jsonResponse({ error: "The call relay could not be reached. Trying a direct call instead." }, 502);
+    console.error("Temporary TURN credentials could not be signed.", error);
+    return jsonResponse({ error: "The call relay credentials could not be created." }, 500);
   }
 
-  if (!relayResponse.ok) {
-    console.error(`Cloudflare TURN credential request returned HTTP ${relayResponse.status}.`);
-    return jsonResponse({ error: "The call relay rejected its configuration. Check the TURN key and Calls Write token." }, 502);
-  }
-
-  let result: { iceServers?: unknown };
-  try {
-    result = await relayResponse.json();
-  } catch (error) {
-    console.error("Cloudflare returned invalid TURN credential JSON.", error);
-    return jsonResponse({ error: "The call relay returned an invalid response." }, 502);
-  }
-
-  const iceServers = Array.isArray(result.iceServers)
-    ? result.iceServers.flatMap((server) => {
-      if (!server || typeof server !== "object" || !("urls" in server)) return [];
-      const candidate = server as {
-        urls: unknown;
-        username?: unknown;
-        credential?: unknown;
-      };
-      const urls = (Array.isArray(candidate.urls) ? candidate.urls : [candidate.urls])
-        .filter((url): url is string => (
-          typeof url === "string"
-          && /^(?:stun|turn|turns):(?:turn|stun)\.cloudflare\.com(?::\d+)?(?:\?transport=(?:udp|tcp))?$/i.test(url)
-        ));
-      if (!urls.length) return [];
-
-      const includesTurn = urls.some((url) => /^turns?:/i.test(url));
-      if (includesTurn) {
-        if (typeof candidate.username !== "string" || typeof candidate.credential !== "string") return [];
-        return [{ urls, username: candidate.username, credential: candidate.credential }];
-      }
-      return [{ urls }];
-    })
-    : [];
-
-  if (!iceServers.some((server) => server.urls.some((url) => /^turns?:/i.test(url)))) {
-    console.error("Cloudflare TURN response contained no valid relay servers.");
-    return jsonResponse({ error: "The call relay returned no usable TURN servers." }, 502);
-  }
-
-  return jsonResponse({ iceServers });
+  return jsonResponse({
+    iceServers: [{
+      urls: [
+        `turn:${turnHost}:3478?transport=udp`,
+        `turn:${turnHost}:3478?transport=tcp`,
+        `turns:${turnHost}:443?transport=tcp`,
+      ],
+      username,
+      credential,
+    }],
+  });
 });

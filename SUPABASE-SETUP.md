@@ -76,44 +76,77 @@ call signaling, and a peer-to-peer WebRTC audio connection. Both people need to
 be online in Kindred and allow microphone access; calls require HTTPS. Networks
 that block direct peer-to-peer traffic need a TURN relay. Devices on the same
 Wi-Fi network can normally connect directly without TURN, provided the local
-network and browser allow WebRTC traffic. Kindred requests
-short-lived Cloudflare TURN credentials through the authenticated
-`kindred-turn-credentials` Supabase Edge Function; permanent provider secrets
-are never sent to the website.
+network and browser allow WebRTC traffic. Kindred requests short-lived TURN
+credentials through the authenticated `kindred-turn-credentials` Supabase
+Edge Function; the permanent relay secret is never sent to the website.
 
-### Configure the Cloudflare TURN relay
+### Set up a self-hosted TURN relay
 
-1. In Cloudflare, open **Realtime > TURN** (or **Calls > TURN**) and create a
-   TURN key. Copy its key ID.
-2. Create a Cloudflare API token with the **Calls Write** permission for the
-   account that owns that TURN key.
-3. In the Supabase dashboard for project `cpobteauoiptthjihhfl`, open
+For callers mainly in East Africa, choose a VPS region with good connectivity
+to East Africa; Johannesburg is a practical nearby option. Start with an
+Ubuntu 24.04 server with a public IPv4 address, at least 1 GB RAM, and enough
+network transfer for audio calls. Relayed audio uses bandwidth in both
+directions, so check the provider's transfer limits and charges. Creating the
+VPS may require a paid account and payment details.
+
+1. Create an Ubuntu 24.04 VPS in Johannesburg with a public IPv4 address.
+   A provider such as Vultr offers this region; compare its current server and
+   data-transfer prices before creating the VPS. Point a DNS hostname such as
+   `turn.example.com` at the VPS IP. Replace `example.com` with a domain you
+   control.
+2. In the provider firewall, allow UDP and TCP `3478`, TCP `443`, and UDP
+   `49160-49259`. Keep TCP `443` free on this VPS for TURN-over-TLS.
+3. Connect to the server over SSH and install Coturn and Certbot:
+
+   ```sh
+   sudo apt update
+   sudo apt install -y coturn certbot
+   sudo certbot certonly --standalone -d turn.example.com
+   ```
+
+   Replace the hostname with your real DNS name. Certbot needs inbound TCP
+   `80` for validation; allow it temporarily in the provider firewall and
+   Ubuntu firewall, then keep it open for automatic certificate renewal.
+4. Allow the TURN and relay ports in Ubuntu's firewall. If UFW is enabled,
+   allow SSH before enabling it so you do not lock yourself out:
+
+   ```sh
+   sudo ufw allow OpenSSH
+   sudo ufw allow 3478/udp
+   sudo ufw allow 3478/tcp
+   sudo ufw allow 443/tcp
+   sudo ufw allow 49160:49259/udp
+   sudo ufw enable
+   ```
+
+5. Copy `infra/coturn/turnserver.conf.example` to `/etc/turnserver.conf`.
+   Replace `turn.example.com` and the certificate paths with your hostname.
+   Generate a strong secret with `openssl rand -hex 32`; set it as Coturn's
+   `static-auth-secret` and keep a private copy for Supabase. Do not commit it
+   or send it in chat. Edit `/etc/default/coturn` and set
+   `TURNSERVER_ENABLED=1`, then run `sudo systemctl enable --now coturn`.
+6. In the Supabase dashboard for project `cpobteauoiptthjihhfl`, open
    **Project Settings > Edge Functions > Secrets** and add:
-   - `CLOUDFLARE_TURN_KEY_ID` — the TURN key ID from step 1.
-   - `CLOUDFLARE_API_TOKEN` — the API token from step 2.
-   Enter secrets only in the dashboard; never put them in the website files,
-   source control, or chat.
-4. Deploy `supabase/functions/kindred-turn-credentials` to that same Supabase
-   project with the Supabase CLI:
+   - `TURN_HOST` — the hostname only, such as `turn.example.com`.
+   - `TURN_SHARED_SECRET` — the same random value as Coturn's
+     `static-auth-secret`.
+7. Deploy `supabase/functions/kindred-turn-credentials` to that Supabase
+   project using the Supabase CLI:
 
    ```text
    supabase functions deploy kindred-turn-credentials --project-ref cpobteauoiptthjihhfl
    ```
 
-   Leave JWT verification enabled for the function. It verifies the signed-in
-   user before requesting one-day credentials from Cloudflare.
-5. Publish the updated website and reload it. Both people in the call must use
-   the updated website. If the relay is unavailable or not configured, Kindred
-   warns you and tries a direct call; restrictive networks may still fail.
-   If the function URL responds with `Requested function was not found`, the
-   function has not been deployed yet. A `503` from the function means one or
-   both Cloudflare secrets are missing. Once deployed and configured, a signed
-   in call should receive temporary `turn:` and `turns:` ICE servers.
+   Leave JWT verification enabled. The function verifies each signed-in user
+   and generates one-day Coturn credentials using the shared secret.
+8. Publish the updated website and test a call with one person on Wi-Fi and
+   another on mobile data. If the function responds with
+   `Requested function was not found`, it has not been deployed. A `503` means
+   one or both TURN secrets are missing.
 
 TURN improves call reachability but cannot guarantee a call through every
-firewall, provider, or device. Cloudflare charges for TURN traffic when it is
-not used with their Realtime SFU; review Cloudflare's current pricing before
-using the relay heavily.
+firewall, provider, or device. Monitor bandwidth usage and the VPS provider's
+network transfer charges.
 
 ## Install Kindred like an app
 
