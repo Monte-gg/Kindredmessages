@@ -179,6 +179,12 @@
                 <h2 id="conversation-title"></h2>
                 <p id="conversation-email"></p>
               </div>
+              <button id="conversation-profile-button" class="icon-button info-button" type="button" aria-label="View friend's profile" title="View profile">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></svg>
+              </button>
+              <button id="audio-call-button" class="icon-button info-button" type="button" aria-label="Start an audio call" title="Start audio call">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.4 19.4 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7l.4 2.8a2 2 0 0 1-.6 1.7L7 10.1a16 16 0 0 0 6 6l1.9-1.9a2 2 0 0 1 1.7-.6l2.8.4a2 2 0 0 1 1.7 1.9Z" /></svg>
+              </button>
               <button id="conversation-info-button" class="icon-button info-button" type="button" aria-label="About this conversation" title="About this conversation">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></svg>
               </button>
@@ -249,8 +255,41 @@
               <input id="profile-email" name="email" type="email" readonly />
             </div>
             <p id="profile-error" class="form-error" role="alert"></p>
+            <label for="profile-bio">About you</label>
+            <div class="input-wrap profile-bio-wrap">
+              <textarea id="profile-bio" name="bio" maxlength="280" rows="4" placeholder="Share a little about yourself"></textarea>
+            </div>
+            <small class="bio-character-count" id="profile-bio-count">0 / 280</small>
+            <p class="profile-public-hint">Your bio is visible to other signed-in members.</p>
             <button id="profile-save-button" class="button button-primary modal-submit" type="submit">Save changes</button>
           </form>
+        </section>
+      </div>
+      <div id="member-profile-backdrop" class="modal-backdrop" hidden>
+        <section class="modal-card profile-card member-profile-card" role="dialog" aria-modal="true" aria-labelledby="member-profile-title">
+          <button id="close-member-profile-button" class="icon-button modal-close" type="button" aria-label="Close profile">
+            <svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" /></svg>
+          </button>
+          <span id="member-profile-avatar" class="avatar profile-avatar"></span>
+          <p class="eyebrow">KINDRED MEMBER</p>
+          <h2 id="member-profile-title"></h2>
+          <p id="member-profile-bio" class="member-profile-bio"></p>
+          <p id="member-profile-joined" class="profile-joined"></p>
+          <button id="member-profile-message-button" class="button button-primary modal-submit" type="button">Message</button>
+        </section>
+      </div>
+      <div id="call-backdrop" class="modal-backdrop" hidden>
+        <section class="modal-card call-card" role="dialog" aria-modal="true" aria-labelledby="call-title">
+          <span id="call-avatar" class="avatar profile-avatar"></span>
+          <p class="eyebrow" id="call-eyebrow">AUDIO CALL</p>
+          <h2 id="call-title"></h2>
+          <p id="call-status" class="modal-copy" aria-live="polite"></p>
+          <audio id="call-remote-audio" autoplay></audio>
+          <div class="call-actions">
+            <button id="call-decline-button" class="call-end-button" type="button">Decline</button>
+            <button id="call-accept-button" class="button button-primary" type="button">Accept call</button>
+            <button id="call-hangup-button" class="call-end-button" type="button" hidden>End call</button>
+          </div>
         </section>
       </div>
       <div id="reset-backdrop" class="modal-backdrop" hidden>
@@ -334,7 +373,7 @@
     <button id="install-app-button" class="install-app-button" type="button" hidden>Install Kindred</button>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.min.js" integrity="sha384-dl/4LkSyQ4uEucc48NM6VDZLAjLLq9yMzZ5JLXumBq7Ld33XBof73hseOqPhO89+" crossorigin="anonymous"></script>
     <script src="supabase-config.js"></script>
-    <script src="pwa.js?v=7"></script>
+    <script src="pwa.js?v=8"></script>
     <script src="app.js"></script>
   </body>
 </html>

@@ -62,6 +62,23 @@
     conversationAvatar: $("#conversation-avatar"),
     conversationTitle: $("#conversation-title"),
     conversationEmail: $("#conversation-email"),
+    conversationProfileButton: $("#conversation-profile-button"),
+    audioCallButton: $("#audio-call-button"),
+    memberProfileBackdrop: $("#member-profile-backdrop"),
+    memberProfileAvatar: $("#member-profile-avatar"),
+    memberProfileTitle: $("#member-profile-title"),
+    memberProfileBio: $("#member-profile-bio"),
+    memberProfileJoined: $("#member-profile-joined"),
+    memberProfileMessageButton: $("#member-profile-message-button"),
+    callBackdrop: $("#call-backdrop"),
+    callAvatar: $("#call-avatar"),
+    callEyebrow: $("#call-eyebrow"),
+    callTitle: $("#call-title"),
+    callStatus: $("#call-status"),
+    callRemoteAudio: $("#call-remote-audio"),
+    callAcceptButton: $("#call-accept-button"),
+    callDeclineButton: $("#call-decline-button"),
+    callHangupButton: $("#call-hangup-button"),
     messageList: $("#message-list"),
     typingIndicator: $("#typing-indicator"),
     typingLabel: $("#typing-label"),
@@ -89,6 +106,8 @@
     profileAvatar: $("#profile-avatar"),
     profileForm: $("#profile-form"),
     profileUsername: $("#profile-username"),
+    profileBio: $("#profile-bio"),
+    profileBioCount: $("#profile-bio-count"),
     profileEmail: $("#profile-email"),
     profileJoined: $("#profile-joined"),
     profilePhotoInput: $("#profile-photo-input"),
@@ -135,6 +154,9 @@
   let messageChannel = null;
   let presenceChannel = null;
   let notificationsChannel = null;
+  let callInboxChannel = null;
+  let callRoomChannel = null;
+  let activeCall = null;
   let pendingNotificationOpen = (() => {
     const params = new URLSearchParams(window.location.search);
     const userId = params.get("notificationUser");
@@ -483,9 +505,9 @@
           : `<button class="member-action" type="button" data-action="add" data-user-id="${escapeHtml(userId)}">Add friend</button>`;
     const isOnline = onlineUserIds.has(userId);
     return `<article class="member-card" role="listitem">
-      <span class="avatar chat-avatar" data-person-avatar="${escapeHtml(userId)}"></span>
+      <button class="avatar chat-avatar member-profile-trigger" type="button" data-action="view-profile" data-user-id="${escapeHtml(userId)}" aria-label="View ${escapeHtml(profile.username)}'s profile" data-person-avatar="${escapeHtml(userId)}"></button>
       <span class="member-card-main">
-        <span class="chat-item-name">${escapeHtml(profile.username)}</span>
+        <button class="member-name-button chat-item-name" type="button" data-action="view-profile" data-user-id="${escapeHtml(userId)}">${escapeHtml(profile.username)}</button>
         <span class="member-status${isOnline ? " is-online" : ""}" data-presence-user="${escapeHtml(userId)}">${isOnline ? "Online" : "Offline"}</span>
       </span>
       <span class="member-card-actions">${actionMarkup}
@@ -631,6 +653,361 @@
           showToast("Online status and live friend requests are unavailable. Check Supabase Realtime settings.");
         }
       });
+  }
+
+  function subscribeRealtimeChannel(channel) {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const timeout = window.setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error("Realtime took too long to connect. Check your connection and Supabase Realtime settings."));
+      }, 12000);
+      channel.subscribe((status) => {
+        if (settled) return;
+        if (status === "SUBSCRIBED") {
+          settled = true;
+          window.clearTimeout(timeout);
+          resolve();
+        } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+          settled = true;
+          window.clearTimeout(timeout);
+          reject(new Error("Realtime calls aren't ready. Run the latest supabase/schema.sql and check Supabase Realtime settings."));
+        }
+      });
+    });
+  }
+
+  function setCallScreen(profile, status, incoming = false) {
+    setAvatar(els.callAvatar, profile.user_id || profile.username, profile);
+    els.callTitle.textContent = profile.username || "Kindred member";
+    els.callStatus.textContent = status;
+    els.callEyebrow.textContent = incoming ? "INCOMING AUDIO CALL" : "AUDIO CALL";
+    els.callAcceptButton.hidden = !incoming;
+    els.callDeclineButton.hidden = !incoming;
+    els.callHangupButton.hidden = incoming;
+    els.callBackdrop.hidden = false;
+  }
+
+  async function setCallStatus(status) {
+    if (!activeCall) return;
+    const { error } = await supabaseClient.from("kindred_calls")
+      .update({ status })
+      .eq("id", activeCall.id);
+    if (error) throw error;
+  }
+
+  function sendCallSignal(event, payload = {}) {
+    if (!callRoomChannel) throw new Error("The call connection is not ready.");
+    return callRoomChannel.send({
+      type: "broadcast",
+      event,
+      payload: { ...payload, call_id: activeCall?.id, user_id: currentUserId },
+    });
+  }
+
+  function createCallRoom(callId) {
+    const channel = supabaseClient.channel(`kindred-call-room:${callId}`, {
+      config: { private: true },
+    });
+    callRoomChannel = channel;
+    ["ready", "offer", "answer", "ice", "declined", "ended"].forEach((event) => {
+      channel.on("broadcast", { event }, ({ payload }) => {
+        if (!activeCall || activeCall.id !== payload?.call_id || payload.user_id === currentUserId) return;
+        handleCallSignal(event, payload).catch((error) => {
+          console.error("Kindred audio call signaling failed.", error);
+          showToast(error.message || "The call couldn't connect.");
+          endCall(true).catch((endError) => console.error("The audio call could not be closed cleanly.", endError));
+        });
+      });
+    });
+    return channel;
+  }
+
+  async function createCallPeer() {
+    if (!activeCall?.stream) throw new Error("Allow microphone access to start the call.");
+    const peer = new RTCPeerConnection({
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    });
+    activeCall.peer = peer;
+    activeCall.queuedIce = [];
+    activeCall.stream.getTracks().forEach((track) => peer.addTrack(track, activeCall.stream));
+    peer.onicecandidate = (event) => {
+      if (!event.candidate || !activeCall || activeCall.peer !== peer) return;
+      sendCallSignal("ice", { candidate: event.candidate.toJSON() })
+        .then((status) => {
+          if (status !== "ok") console.error("An audio call network candidate could not be sent.", status);
+        })
+        .catch((error) => console.error("An audio call network candidate could not be sent.", error));
+    };
+    peer.ontrack = (event) => {
+      els.callRemoteAudio.srcObject = event.streams[0] || new MediaStream([event.track]);
+      els.callRemoteAudio.play().catch((error) => console.info("Tap the page to hear the audio call.", error));
+    };
+    peer.onconnectionstatechange = () => {
+      if (!activeCall || activeCall.peer !== peer) return;
+      if (peer.connectionState === "connected") {
+        window.clearTimeout(activeCall.ringTimeout);
+        window.clearTimeout(activeCall.connectionTimeout);
+        els.callStatus.textContent = "Connected";
+      } else if (peer.connectionState === "disconnected") {
+        window.clearTimeout(activeCall.connectionTimeout);
+        activeCall.connectionTimeout = window.setTimeout(() => {
+          if (activeCall?.peer === peer && peer.connectionState === "disconnected") {
+            showToast("The call lost its connection.");
+            endCall(true).catch((error) => console.error("The disconnected call could not be closed.", error));
+          }
+        }, 8000);
+      } else if (peer.connectionState === "failed") {
+        showToast("The call couldn't connect. Your network may block direct audio calls.");
+        endCall(true).catch((error) => console.error("The audio call could not be closed cleanly.", error));
+      }
+    };
+    return peer;
+  }
+
+  async function handleCallSignal(event, payload) {
+    if (!activeCall) return;
+    if (event === "ready" && activeCall.role === "caller") {
+      els.callStatus.textContent = "Connecting…";
+      activeCall.stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      const peer = await createCallPeer();
+      const offer = await peer.createOffer();
+      await peer.setLocalDescription(offer);
+      const status = await sendCallSignal("offer", { description: peer.localDescription });
+      if (status !== "ok") throw new Error("The call offer couldn't be sent. Try again.");
+      return;
+    }
+    if (event === "offer" && activeCall.role === "callee") {
+      const peer = await createCallPeer();
+      await peer.setRemoteDescription(payload.description);
+      for (const candidate of activeCall.queuedIce) await peer.addIceCandidate(candidate);
+      activeCall.queuedIce = [];
+      const answer = await peer.createAnswer();
+      await peer.setLocalDescription(answer);
+      const status = await sendCallSignal("answer", { description: peer.localDescription });
+      if (status !== "ok") throw new Error("Your call answer couldn't be sent. Try again.");
+      els.callStatus.textContent = "Connecting…";
+      return;
+    }
+    if (event === "answer" && activeCall.role === "caller") {
+      await activeCall.peer.setRemoteDescription(payload.description);
+      for (const candidate of activeCall.queuedIce) await activeCall.peer.addIceCandidate(candidate);
+      activeCall.queuedIce = [];
+      return;
+    }
+    if (event === "ice" && payload.candidate) {
+      if (activeCall.peer?.remoteDescription) {
+        await activeCall.peer.addIceCandidate(payload.candidate);
+      } else {
+        activeCall.queuedIce.push(payload.candidate);
+      }
+      return;
+    }
+    if (event === "declined") {
+      showToast(`${activeCall.profile.username} declined the call.`);
+      await endCall(false);
+      return;
+    }
+    if (event === "ended") {
+      showToast("The other person ended the call.");
+      await endCall(false);
+    }
+  }
+
+  async function handleIncomingCall(payload) {
+    if (!payload || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(payload.call_id || "")) return;
+    const { data: call, error } = await supabaseClient.from("kindred_calls")
+      .select("id,caller_id,callee_id,status")
+      .eq("id", payload.call_id)
+      .maybeSingle();
+    if (error) {
+      console.error("An incoming audio call couldn't be checked.", error);
+      return;
+    }
+    if (!call || call.callee_id !== currentUserId || call.status !== "ringing") return;
+    if (activeCall) {
+      await supabaseClient.from("kindred_calls").update({ status: "declined" }).eq("id", call.id);
+      const busyChannel = supabaseClient.channel(`kindred-call-room:${call.id}`, {
+        config: { private: true },
+      });
+      try {
+        await subscribeRealtimeChannel(busyChannel);
+        await busyChannel.send({
+          type: "broadcast",
+          event: "declined",
+          payload: { call_id: call.id, user_id: currentUserId },
+        });
+      } catch (error) {
+        console.error("A busy response couldn't be sent to the caller.", error);
+      } finally {
+        await supabaseClient.removeChannel(busyChannel);
+      }
+      return;
+    }
+    const { data: profile, error: profileError } = await supabaseClient.from("profiles")
+      .select("user_id,username,avatar_path,bio")
+      .eq("user_id", call.caller_id)
+      .maybeSingle();
+    if (profileError || !profile) {
+      if (profileError) console.error("The caller profile couldn't be loaded.", profileError);
+      return;
+    }
+    profilesById.set(profile.user_id, profile);
+    activeCall = { id: call.id, role: "callee", profile, callerId: call.caller_id, queuedIce: [] };
+    const channel = createCallRoom(call.id);
+    setCallScreen(profile, "Someone is calling you.", true);
+    try {
+      await subscribeRealtimeChannel(channel);
+      activeCall.ringTimeout = window.setTimeout(() => {
+        if (activeCall?.id !== call.id || activeCall.role !== "callee") return;
+        showToast("The incoming call ended because it wasn't answered.");
+        endCall(false, "missed").catch((error) => console.error("The unanswered incoming call couldn't be closed.", error));
+      }, 40000);
+    } catch (error) {
+      console.error("The incoming audio call could not connect.", error);
+      showToast(error.message || "The incoming call couldn't connect.");
+      await endCall(false);
+    }
+  }
+
+  async function startCallInbox() {
+    if (!currentUserId) return;
+    if (callInboxChannel) await supabaseClient.removeChannel(callInboxChannel);
+    const channel = supabaseClient.channel(`kindred-call-inbox:${currentUserId}`, {
+      config: { private: true },
+    });
+    callInboxChannel = channel;
+    channel.on("broadcast", { event: "invite" }, ({ payload }) => {
+      handleIncomingCall(payload).catch((error) => {
+        console.error("The incoming call couldn't be handled.", error);
+        showToast(error.message || "An incoming call couldn't be opened.");
+      });
+    });
+    try {
+      await subscribeRealtimeChannel(channel);
+    } catch (error) {
+      console.error("The Kindred call inbox could not connect.", error);
+      showToast(error.message || "Audio calls aren't available. Run the latest supabase/schema.sql.");
+    }
+  }
+
+  async function startAudioCall() {
+    if (!activeChat || !activeContact || activeCall) {
+      if (activeCall) showToast("Finish your current call before starting another one.");
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || !window.RTCPeerConnection) {
+      showToast("Audio calls need a supported browser and a secure HTTPS connection.");
+      return;
+    }
+    els.audioCallButton.disabled = true;
+    try {
+      const { data: callId, error } = await supabaseClient.rpc("create_kindred_call", {
+        target_conversation_id: activeChat,
+      });
+      if (error) throw error;
+      const profile = activeContact;
+      activeCall = { id: callId, role: "caller", profile, queuedIce: [] };
+      const room = createCallRoom(callId);
+      setCallScreen(profile, "Calling…");
+      await subscribeRealtimeChannel(room);
+      const inbox = supabaseClient.channel(`kindred-call-inbox:${profile.user_id}`, {
+        config: { private: true },
+      });
+      await subscribeRealtimeChannel(inbox);
+      const status = await inbox.send({
+        type: "broadcast",
+        event: "invite",
+        payload: { call_id: callId },
+      });
+      await supabaseClient.removeChannel(inbox);
+      if (status !== "ok") throw new Error("The call invitation couldn't be sent.");
+      activeCall.ringTimeout = window.setTimeout(() => {
+        if (activeCall?.id !== callId) return;
+        showToast(`${profile.username} didn't answer.`);
+        endCall(true, "missed").catch((error) => console.error("The unanswered call could not be closed.", error));
+      }, 35000);
+    } catch (error) {
+      if (activeCall) await endCall(false);
+      els.callBackdrop.hidden = true;
+      showToast(error.message || "The audio call couldn't be started. Run the latest supabase/schema.sql.");
+    } finally {
+      els.audioCallButton.disabled = false;
+    }
+  }
+
+  async function acceptAudioCall() {
+    if (!activeCall || activeCall.role !== "callee") return;
+    if (!navigator.mediaDevices?.getUserMedia || !window.RTCPeerConnection) {
+      showToast("Audio calls need a supported browser and a secure HTTPS connection.");
+      await endCall(true, "declined");
+      return;
+    }
+    els.callAcceptButton.disabled = true;
+    try {
+      window.clearTimeout(activeCall.ringTimeout);
+      activeCall.stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      await createCallPeer();
+      await setCallStatus("accepted");
+      const status = await sendCallSignal("ready");
+      if (status !== "ok") throw new Error("The call acceptance couldn't be sent.");
+      els.callStatus.textContent = "Connecting…";
+      els.callAcceptButton.hidden = true;
+      els.callDeclineButton.hidden = true;
+      els.callHangupButton.hidden = false;
+    } catch (error) {
+      showToast(error.message || "Microphone access is needed to answer the call.");
+      await endCall(true, "declined");
+    } finally {
+      els.callAcceptButton.disabled = false;
+    }
+  }
+
+  async function endCall(notifyPeer = true, status = "ended") {
+    const call = activeCall;
+    if (!call) return;
+    activeCall = null;
+    window.clearTimeout(call.ringTimeout);
+    window.clearTimeout(call.connectionTimeout);
+    if (notifyPeer && callRoomChannel) {
+      try {
+        await callRoomChannel.send({
+          type: "broadcast",
+          event: status === "declined" ? "declined" : "ended",
+          payload: { call_id: call.id, user_id: currentUserId },
+        });
+      } catch (error) {
+        console.error("The call ending couldn't be sent to the other person.", error);
+      }
+    }
+    if (call.stream) call.stream.getTracks().forEach((track) => track.stop());
+    if (call.peer) call.peer.close();
+    els.callRemoteAudio.srcObject = null;
+    els.callBackdrop.hidden = true;
+    if (callRoomChannel) {
+      const channel = callRoomChannel;
+      callRoomChannel = null;
+      await supabaseClient.removeChannel(channel);
+    }
+    if (currentUserId) {
+      const { error } = await supabaseClient.from("kindred_calls")
+        .update({ status })
+        .eq("id", call.id);
+      if (error) {
+        console.error("The call status couldn't be saved.", error);
+        showToast("The call ended, but its status couldn't be synchronized.");
+      }
+      if (call.role === "caller") {
+        const { error: deleteError } = await supabaseClient.from("kindred_calls")
+          .delete()
+          .eq("id", call.id);
+        if (deleteError) {
+          console.error("The finished call record couldn't be removed.", deleteError);
+          showToast("The call ended, but its temporary call record couldn't be removed.");
+        }
+      }
+    }
   }
 
   function updateNotificationsButton() {
@@ -1110,11 +1487,19 @@
   }
 
   async function loadCloudProfile(user) {
-    const { data, error } = await supabaseClient
+    let { data, error } = await supabaseClient
       .from("profiles")
-      .select("username,avatar_path,created_at")
+      .select("username,avatar_path,bio,created_at")
       .eq("user_id", user.id)
       .maybeSingle();
+    if (error?.code === "42703" && error.message?.includes("profiles.bio")) {
+      const fallback = await supabaseClient.from("profiles")
+        .select("username,avatar_path,created_at")
+        .eq("user_id", user.id)
+        .maybeSingle();
+      data = fallback.data ? { ...fallback.data, bio: "" } : null;
+      error = fallback.error;
+    }
     if (error) throw error;
     if (!data) {
       throw new Error("Your account profile is missing in Supabase. Run the updated supabase/schema.sql in this project's SQL Editor, then try again.");
@@ -1123,6 +1508,7 @@
       email: user.email.toLowerCase(),
       username: data.username,
       avatar_path: data.avatar_path,
+      bio: data.bio || "",
       created_at: data.created_at,
     };
   }
@@ -1150,7 +1536,12 @@
         showToast(error.message || "Your account was created, but its profile picture couldn't be saved.");
       }
     }
-    profilesById.set(user.id, { user_id: user.id, username: cloudProfile.username, avatar_path: cloudProfile.avatar_path });
+    profilesById.set(user.id, {
+      user_id: user.id,
+      username: cloudProfile.username,
+      avatar_path: cloudProfile.avatar_path,
+      bio: cloudProfile.bio || "",
+    });
     const store = readStore();
     store.profiles[user.email.toLowerCase()] = {
       ...(store.profiles[user.email.toLowerCase()] || {}),
@@ -1161,6 +1552,7 @@
     showChatScreen(user.email);
     startPresence();
     startMessageNotifications();
+    startCallInbox();
     updateNotificationsButton();
     processPendingNotificationOpen();
   }
@@ -1195,6 +1587,8 @@
     const store = readStore();
     const profile = profileFor(store, currentEmail);
     els.profileUsername.value = cloudProfile?.username || profile.username || "";
+    els.profileBio.value = cloudProfile?.bio || "";
+    updateBioCharacterCount();
     els.profileEmail.value = currentEmail;
     els.profileJoined.textContent = cloudProfile?.created_at
       ? `Member since ${new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(new Date(cloudProfile.created_at))}`
@@ -1210,9 +1604,15 @@
   async function saveProfile(event) {
     event.preventDefault();
     const username = els.profileUsername.value.trim();
+    const bio = els.profileBio.value.trim();
     if (!username || username.length > 40) {
       els.profileError.textContent = "Choose a username between 1 and 40 characters.";
       els.profileUsername.focus();
+      return;
+    }
+    if (bio.length > 280) {
+      els.profileError.textContent = "Your bio must be 280 characters or fewer.";
+      els.profileBio.focus();
       return;
     }
     els.profileSaveButton.disabled = true;
@@ -1224,15 +1624,18 @@
       const { data, error } = await supabaseClient.rpc("update_my_profile", {
         new_username: username,
         new_avatar_path: uploadedPath || null,
+        new_bio: bio,
       });
       if (error) throw error;
       const savedUsername = data || username;
       cloudProfile.username = savedUsername;
+      cloudProfile.bio = bio;
       if (uploadedPath) cloudProfile.avatar_path = uploadedPath;
       profilesById.set(currentUserId, {
         user_id: currentUserId,
         username: savedUsername,
         avatar_path: cloudProfile.avatar_path,
+        bio,
       });
       const store = readStore();
       store.profiles[currentEmail] = {
@@ -1271,7 +1674,47 @@
     }
   }
 
+  function updateBioCharacterCount() {
+    els.profileBioCount.textContent = `${els.profileBio.value.length} / 280`;
+  }
+
+  async function openMemberProfile(userId) {
+    if (!userId || userId === currentUserId) return;
+    els.memberProfileTitle.textContent = "Loading profile…";
+    els.memberProfileBio.textContent = "";
+    els.memberProfileJoined.textContent = "";
+    els.memberProfileBackdrop.hidden = false;
+    try {
+      const { data, error } = await supabaseClient.from("profiles")
+        .select("user_id,username,avatar_path,bio,created_at")
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) {
+        els.memberProfileBackdrop.hidden = true;
+        showToast("This profile is no longer available.");
+        return;
+      }
+      profilesById.set(userId, data);
+      setAvatar(els.memberProfileAvatar, userId, data);
+      els.memberProfileTitle.textContent = data.username;
+      els.memberProfileBio.textContent = data.bio?.trim() || "This member hasn't added a bio yet.";
+      els.memberProfileJoined.textContent = data.created_at
+        ? `Member since ${new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(new Date(data.created_at))}`
+        : "";
+      els.memberProfileMessageButton.dataset.userId = userId;
+    } catch (error) {
+      els.memberProfileBackdrop.hidden = true;
+      showToast(error.message || "This profile couldn't be loaded.");
+    }
+  }
+
+  function closeMemberProfile() {
+    els.memberProfileBackdrop.hidden = true;
+  }
+
   function showLoginScreen() {
+    endCall(false).catch((error) => console.error("The audio call couldn't be closed during sign out.", error));
     stopTyping();
     currentEmail = "";
     currentUserId = "";
@@ -1297,6 +1740,10 @@
     if (notificationsChannel) {
       supabaseClient.removeChannel(notificationsChannel);
       notificationsChannel = null;
+    }
+    if (callInboxChannel) {
+      supabaseClient.removeChannel(callInboxChannel);
+      callInboxChannel = null;
     }
     onlineUserIds.clear();
     els.accountMenu.classList.remove("is-visible");
@@ -2018,6 +2465,7 @@
     const button = event.target.closest("button[data-action]");
     if (!button) return;
     if (button.dataset.action === "message") openConversation(button.dataset.userId);
+    else if (button.dataset.action === "view-profile") openMemberProfile(button.dataset.userId);
     else handleFriendAction(button);
   });
   els.chatSearch.addEventListener("input", () => {
@@ -2053,6 +2501,40 @@
     }
   });
   els.profileButton.addEventListener("click", openProfile);
+  els.profileBio.addEventListener("input", updateBioCharacterCount);
+  els.conversationProfileButton.addEventListener("click", () => {
+    if (activeContact) openMemberProfile(activeContact.user_id);
+  });
+  els.audioCallButton.addEventListener("click", startAudioCall);
+  els.callAcceptButton.addEventListener("click", acceptAudioCall);
+  els.callDeclineButton.addEventListener("click", async () => {
+    if (!activeCall) return;
+    if (activeCall.role === "callee") {
+      try {
+        await setCallStatus("declined");
+      } catch (error) {
+        console.error("The declined call status couldn't be saved.", error);
+      }
+      await endCall(true, "declined");
+    } else {
+      await endCall(true);
+    }
+  });
+  els.callHangupButton.addEventListener("click", () => {
+    endCall(true).catch((error) => {
+      console.error("The audio call couldn't be ended.", error);
+      showToast("The call couldn't be ended cleanly. Close the call window to stop using your microphone.");
+    });
+  });
+  $("#close-member-profile-button").addEventListener("click", closeMemberProfile);
+  els.memberProfileBackdrop.addEventListener("click", (event) => {
+    if (event.target === els.memberProfileBackdrop) closeMemberProfile();
+  });
+  els.memberProfileMessageButton.addEventListener("click", () => {
+    const userId = els.memberProfileMessageButton.dataset.userId;
+    closeMemberProfile();
+    openConversation(userId);
+  });
   els.notificationsButton.addEventListener("click", async () => {
     if (notificationsEnabled && Notification.permission === "granted") {
       notificationsEnabled = false;
@@ -2073,6 +2555,7 @@
   });
   els.profileForm.addEventListener("submit", saveProfile);
   els.signOutButton.addEventListener("click", async () => {
+    if (activeCall) await endCall(true);
     const { error } = await supabaseClient.auth.signOut();
     if (error) {
       showToast(error.message || "You couldn't be signed out. Try again.");
@@ -2082,6 +2565,9 @@
   });
   $("#conversation-info-button").addEventListener("click", () => {
     showToast("Messages and attachments in this chat are shared with its members.");
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !els.memberProfileBackdrop.hidden) closeMemberProfile();
   });
   document.addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {

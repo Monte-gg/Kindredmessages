@@ -47,7 +47,8 @@ reload the site and sign in again.
 
 The same SQL file also enables the member directory, username/email search,
 friend requests, private direct conversations, realtime text messages, read
-receipts, typing indicators, and private file attachments. Email search requires the exact email address; the
+receipts, typing indicators, audio-call signaling, member bios, and private
+file attachments. Email search requires the exact email address; the
 matching member's email is never shown to other users. Re-run the full updated
 SQL in the Supabase SQL Editor to install these features.
 The latest schema also allows you to delete your own messages and attachments
@@ -63,6 +64,12 @@ account email is displayed in Profile but is not editable there. Profile
 pictures are stored in the public `kindred-profile-pictures` bucket so member
 avatars can appear across devices. Only the signed-in owner can upload or
 remove pictures under their own user ID folder.
+Members can add a bio of up to 280 characters in Profile; it is visible to
+signed-in members. Open a member profile from the People list or a conversation
+header. Audio calls use browser microphone permission, Supabase Realtime for
+private call signaling, and a peer-to-peer WebRTC audio connection. Both people
+need to be online in Kindred and allow microphone access; calls require HTTPS
+and may not connect on networks that block direct peer-to-peer traffic.
 
 ## Install Kindred like an app
 

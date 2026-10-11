@@ -1,4 +1,4 @@
-const CACHE_NAME = "kindred-shell-v7";
+const CACHE_NAME = "kindred-shell-v8";
 const APP_SHELL = [
   "./",
   "./index.html",

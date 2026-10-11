@@ -2,11 +2,26 @@ create table if not exists public.profiles (
   user_id uuid primary key references auth.users(id) on delete cascade,
   username text not null check (char_length(username) between 1 and 40),
   avatar_path text,
+  bio text not null default '' check (char_length(bio) <= 280),
   created_at timestamptz not null default now()
 );
 
 alter table public.profiles
   add column if not exists avatar_path text;
+alter table public.profiles
+  add column if not exists bio text not null default '';
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'profiles_bio_length'
+      and conrelid = 'public.profiles'::regclass
+  ) then
+    alter table public.profiles
+      add constraint profiles_bio_length check (char_length(bio) <= 280);
+  end if;
+end;
+$$;
 
 create unique index if not exists profiles_username_lower_unique
   on public.profiles (lower(username));
@@ -79,11 +94,24 @@ create table if not exists public.messages (
 create index if not exists messages_conversation_created_idx
   on public.messages (conversation_id, created_at);
 
+create table if not exists public.kindred_calls (
+  id uuid primary key default gen_random_uuid(),
+  conversation_id uuid not null references public.conversations(id) on delete cascade,
+  caller_id uuid not null references auth.users(id) on delete cascade,
+  callee_id uuid not null references auth.users(id) on delete cascade,
+  status text not null default 'ringing'
+    check (status in ('ringing', 'accepted', 'declined', 'ended', 'missed')),
+  created_at timestamptz not null default now(),
+  check (caller_id <> callee_id)
+);
+
 alter table public.profiles enable row level security;
 alter table public.conversations enable row level security;
 alter table public.conversation_members enable row level security;
 alter table public.friend_requests enable row level security;
 alter table public.messages enable row level security;
+alter table public.kindred_calls enable row level security;
+alter table realtime.messages enable row level security;
 
 drop policy if exists "Users can view their own profile" on public.profiles;
 drop policy if exists "Authenticated users can view member directory" on public.profiles;
@@ -92,7 +120,12 @@ create policy "Authenticated users can view member directory"
   using (true);
 
 drop function if exists public.update_my_profile(text);
-create or replace function public.update_my_profile(new_username text, new_avatar_path text default null)
+drop function if exists public.update_my_profile(text, text);
+create or replace function public.update_my_profile(
+  new_username text,
+  new_avatar_path text default null,
+  new_bio text default null
+)
 returns text
 language plpgsql
 security definer
@@ -119,10 +152,14 @@ begin
   ) then
     raise exception 'Choose a valid profile picture before saving';
   end if;
+  if new_bio is not null and char_length(new_bio) > 280 then
+    raise exception 'Your bio must be 280 characters or fewer';
+  end if;
 
   update public.profiles
   set username = cleaned_username,
-      avatar_path = coalesce(new_avatar_path, avatar_path)
+      avatar_path = coalesce(new_avatar_path, avatar_path),
+      bio = coalesce(new_bio, bio)
   where user_id = auth.uid();
   if not found then
     raise exception 'Your profile could not be found';
@@ -134,8 +171,8 @@ exception
 end;
 $$;
 
-revoke all on function public.update_my_profile(text, text) from public, anon;
-grant execute on function public.update_my_profile(text, text) to authenticated;
+revoke all on function public.update_my_profile(text, text, text) from public, anon;
+grant execute on function public.update_my_profile(text, text, text) to authenticated;
 
 create or replace function public.is_conversation_member(target_conversation_id uuid)
 returns boolean
@@ -154,6 +191,109 @@ $$;
 
 revoke all on function public.is_conversation_member(uuid) from public, anon;
 grant execute on function public.is_conversation_member(uuid) to authenticated;
+
+create or replace function public.create_kindred_call(target_conversation_id uuid)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  current_user_id uuid := auth.uid();
+  target_user_id uuid;
+  call_id uuid;
+begin
+  if current_user_id is null then
+    raise exception 'Authentication is required';
+  end if;
+
+  select member.user_id into target_user_id
+  from public.conversation_members as member
+  where member.conversation_id = target_conversation_id
+    and member.user_id <> current_user_id
+  limit 1;
+
+  if target_user_id is null
+    or not public.is_conversation_member(target_conversation_id) then
+    raise exception 'You can only call someone in this conversation';
+  end if;
+
+  insert into public.kindred_calls (conversation_id, caller_id, callee_id)
+  values (target_conversation_id, current_user_id, target_user_id)
+  returning id into call_id;
+
+  return call_id;
+end;
+$$;
+
+revoke all on function public.create_kindred_call(uuid) from public, anon;
+grant execute on function public.create_kindred_call(uuid) to authenticated;
+
+drop policy if exists "Call participants can view calls" on public.kindred_calls;
+create policy "Call participants can view calls"
+  on public.kindred_calls for select to authenticated
+  using (caller_id = (select auth.uid()) or callee_id = (select auth.uid()));
+
+drop policy if exists "Call participants can update call status" on public.kindred_calls;
+create policy "Call participants can update call status"
+  on public.kindred_calls for update to authenticated
+  using (caller_id = (select auth.uid()) or callee_id = (select auth.uid()))
+  with check (
+    (caller_id = (select auth.uid()) or callee_id = (select auth.uid()))
+    and status in ('accepted', 'declined', 'ended', 'missed')
+  );
+
+drop policy if exists "Call participants can delete call records" on public.kindred_calls;
+create policy "Call participants can delete call records"
+  on public.kindred_calls for delete to authenticated
+  using (caller_id = (select auth.uid()) or callee_id = (select auth.uid()));
+
+drop policy if exists "Members can receive Kindred call signals" on realtime.messages;
+create policy "Members can receive Kindred call signals"
+  on realtime.messages for select to authenticated
+  using (
+    case
+      when realtime.topic() like 'kindred-call-inbox:%' then
+        pg_catalog.split_part(realtime.topic(), ':', 2) = (select auth.uid())::text
+        or exists (
+          select 1 from public.kindred_calls as call
+          where call.callee_id::text = pg_catalog.split_part(realtime.topic(), ':', 2)
+            and call.caller_id = (select auth.uid())
+            and call.status = 'ringing'
+            and call.created_at > now() - interval '1 minute'
+        )
+      when realtime.topic() like 'kindred-call-room:%' then
+        exists (
+          select 1 from public.kindred_calls as call
+          where call.id::text = pg_catalog.split_part(realtime.topic(), ':', 2)
+            and (call.caller_id = (select auth.uid()) or call.callee_id = (select auth.uid()))
+        )
+      else false
+    end
+  );
+
+drop policy if exists "Members can send Kindred call signals" on realtime.messages;
+create policy "Members can send Kindred call signals"
+  on realtime.messages for insert to authenticated
+  with check (
+    case
+      when realtime.topic() like 'kindred-call-inbox:%' then
+        exists (
+          select 1 from public.kindred_calls as call
+          where call.id::text = payload ->> 'call_id'
+            and call.callee_id::text = pg_catalog.split_part(realtime.topic(), ':', 2)
+            and call.caller_id = (select auth.uid())
+            and call.status = 'ringing'
+        )
+      when realtime.topic() like 'kindred-call-room:%' then
+        exists (
+          select 1 from public.kindred_calls as call
+          where call.id::text = pg_catalog.split_part(realtime.topic(), ':', 2)
+            and (call.caller_id = (select auth.uid()) or call.callee_id = (select auth.uid()))
+        )
+      else false
+    end
+  );
 
 drop policy if exists "Members can view their friend requests" on public.friend_requests;
 create policy "Members can view their friend requests"
@@ -362,6 +502,7 @@ revoke all on function public.create_direct_conversation(uuid) from public, anon
 grant execute on function public.create_direct_conversation(uuid) to authenticated;
 
 grant select on table public.conversations, public.conversation_members, public.messages to authenticated;
+grant select, update (status), delete on table public.kindred_calls to authenticated;
 grant insert on table public.messages to authenticated;
 grant delete on table public.messages to authenticated;
 grant usage, select on sequence public.messages_id_seq to authenticated;

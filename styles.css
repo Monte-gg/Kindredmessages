@@ -166,6 +166,9 @@ kbd { display: inline-grid; min-width: 17px; height: 18px; place-items: center; 
 .people-section h3 span { display: grid; min-width: 16px; height: 16px; place-items: center; padding: 0 4px; border-radius: 5px; background: var(--surface-soft); font-size: 8px; letter-spacing: 0; }
 .member-card { display: grid; grid-template-columns: 42px minmax(0, 1fr); align-items: center; gap: 7px 10px; padding: 9px; border-radius: 9px; }
 .member-card:hover { background: var(--surface-soft); }
+.member-profile-trigger { padding: 0; border: 0; cursor: pointer; }
+.member-name-button { width: fit-content; padding: 0; border: 0; background: transparent; color: var(--ink); text-align: left; cursor: pointer; font: inherit; font-size: 11px; font-weight: 700; }
+.member-name-button:hover { color: var(--green-dark); text-decoration: underline; }
 .member-card-main { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
 .member-status { color: var(--text-muted); font-size: 9px; }
 .member-status::before, .presence-label::before { display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: #98a2b1; content: ""; vertical-align: 1px; }
@@ -338,10 +341,26 @@ body:has(.chat-screen:not([hidden])) .install-app-button { bottom: calc(82px + e
 .profile-card form label:not(:first-child) { margin-top: 14px; }
 .profile-card .input-wrap { width: 100%; }
 .profile-card .input-wrap input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font-size: 12px; }
+.profile-card .profile-bio-wrap { align-items: stretch; padding: 9px 11px; }
+.profile-card .profile-bio-wrap textarea { width: 100%; min-width: 0; resize: vertical; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: 12px; line-height: 1.5; }
+.bio-character-count { display: block; margin: 4px 2px 0; color: var(--text-muted); font-size: 9px; text-align: right; }
+.profile-public-hint { margin: 4px 0 11px; color: var(--text-muted); font-size: 9px; }
 .profile-card .profile-readonly { background: var(--surface-soft); }
 .profile-card .profile-readonly input { color: var(--text-muted); }
 .profile-card .form-error { min-height: 16px; }
 .modal-submit { width: 100%; height: 44px; margin-top: 6px; font-size: 12px; }
+.member-profile-card .profile-avatar, .call-card .profile-avatar { margin-top: 14px; }
+.member-profile-card > h2, .call-card > h2 { text-align: center; }
+.member-profile-bio { min-height: 30px; margin: 5px 0 18px; color: var(--text-muted); font-size: 12px; line-height: 1.6; text-align: center; white-space: pre-wrap; overflow-wrap: anywhere; }
+.call-card { text-align: center; }
+.call-card .modal-copy { min-height: 20px; }
+#call-remote-audio { display: none; }
+.call-actions { display: flex; justify-content: center; gap: 10px; margin-top: 22px; }
+.call-actions button { min-height: 42px; padding: 0 17px; border-radius: 9px; cursor: pointer; font: inherit; font-size: 11px; font-weight: 700; }
+.call-actions .button-primary { border: 0; background: var(--green); color: white; }
+.call-end-button { border: 1px solid #e8c8ce; background: #fff4f6; color: #9c3048; }
+.call-end-button:hover { background: #f9e6eb; }
+.call-actions button:disabled { cursor: wait; opacity: .6; }
 .modal-footnote { margin: 13px 0 0; color: #a0a8b0; font-size: 9px; text-align: center; line-height: 1.5; }
 .toast { position: fixed; z-index: 10; right: 20px; bottom: 20px; max-width: min(360px, calc(100% - 40px)); padding: 11px 16px; border-radius: 9px; background: #34443a; box-shadow: 0 8px 24px rgb(29 43 34 / 20%); color: white; font-size: 11px; opacity: 0; pointer-events: none; transform: translateY(8px); transition: opacity .2s, transform .2s; }
 .toast.is-visible { opacity: 1; transform: translateY(0); }
