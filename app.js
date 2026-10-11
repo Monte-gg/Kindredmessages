@@ -28,7 +28,6 @@
     loginScreen: $("#login-screen"),
     chatScreen: $("#chat-screen"),
     themeToggle: $("#theme-toggle"),
-    refreshAppButton: $("#refresh-app-button"),
     checkUpdatesButton: $("#check-updates-button"),
     loginForm: $("#login-form"),
     loginUsername: $("#login-username"),
@@ -92,6 +91,7 @@
     cancelReplyButton: $("#cancel-reply-button"),
     emojiButton: $("#emoji-button"),
     emojiPicker: $("#emoji-picker"),
+    voiceNoteButton: $("#voice-note-button"),
     typingIndicator: $("#typing-indicator"),
     typingLabel: $("#typing-label"),
     messageForm: $("#message-form"),
@@ -171,6 +171,10 @@
   let forwardTarget = null;
   let pendingAttachment = null;
   let attachmentSending = false;
+  let voiceRecording = false;
+  let voiceMediaRecorder = null;
+  let voiceNoteStream = null;
+  let voiceNoteChunks = [];
   let authMode = "login";
   let recoveryChallenge = null;
   let cloudProfile = null;
@@ -179,7 +183,11 @@
   const messageActionsById = new Map();
   const profilePhotoUrlByPath = new Map();
   const attachmentUrlCache = new Map();
-  const EMOJI_CHOICES = ["😀", "😂", "🥰", "😍", "😊", "👍", "👎", "❤️", "🎉", "🙏", "😭", "🔥", "✨", "😮", "🤔", "😎", "💯"];
+  const EMOJI_CHOICES = ["😀", "😁", "😂", "😃", "😄", "😅", "😆", "😉", "😊", "😍", "😘", "😎", "🤩", "😇", "😜", "😝", "🤪", "🤗", "🤔", "😮", "🙌", "👏", "👍", "👎", "👌", "💪", "🔥", "✨", "🎉", "🎊", "❤️", "💙", "💚", "💛", "💜", "🧡", "💔", "😴", "😵", "😬", "🤝", "🙏", "💯", "✅", "⚡", "🌟", "🌈", "☀️", "🌙", "🌸", "💎", "🏆", "🍀", "🍕", "🎂", "🍔", "☕", "🍷", "🎵"];
+  function setFieldError(field, message) {
+    if (field) field.textContent = message;
+  }
+
   let toastTimer;
   let messageChannel = null;
   let presenceChannel = null;
@@ -1661,8 +1669,8 @@
     return `${(size / (1024 * 1024)).toFixed(1)} MB`;
   }
 
-  async function renderAttachment(message) {
-    if (!message.attachment_path) return "";
+  async function resolveAttachmentUrl(message) {
+    if (!message?.attachment_path) return "";
     let signedUrl = attachmentUrlCache.get(message.attachment_path);
     if (!signedUrl || signedUrl.expiresAt <= Date.now()) {
       const { data, error } = await supabaseClient.storage
@@ -1670,30 +1678,136 @@
         .createSignedUrl(message.attachment_path, 300);
       if (error || !data?.signedUrl) {
         if (error) console.error("A chat attachment could not be opened.", error);
-        return '<div class="attachment-missing">This attachment is unavailable.</div>';
+        return "";
       }
       signedUrl = { url: data.signedUrl, expiresAt: Date.now() + 240000 };
       attachmentUrlCache.set(message.attachment_path, signedUrl);
     }
-    if (!signedUrl?.url) {
+    return signedUrl?.url || "";
+  }
+
+  function ensureMediaPreview() {
+    let overlay = document.getElementById("media-preview-backdrop");
+    if (overlay) return overlay;
+    overlay = document.createElement("div");
+    overlay.id = "media-preview-backdrop";
+    overlay.className = "modal-backdrop media-preview-backdrop";
+    overlay.hidden = true;
+    overlay.innerHTML = `
+      <section class="modal-card media-preview-card" role="dialog" aria-modal="true" aria-labelledby="media-preview-title">
+        <button class="icon-button modal-close" type="button" data-media-preview-close="true" aria-label="Close media preview">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
+        </button>
+        <div class="media-preview-header">
+          <p class="eyebrow">MEDIA</p>
+          <h2 id="media-preview-title">Attachment preview</h2>
+        </div>
+        <div class="media-preview-content"></div>
+        <div class="media-preview-actions">
+          <button type="button" data-media-preview-action="open">Open</button>
+          <button type="button" data-media-preview-action="download">Download</button>
+          <button type="button" data-media-preview-action="share">Share</button>
+          <button type="button" data-media-preview-action="forward">Forward</button>
+        </div>
+      </section>
+    `;
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) closeMediaPreview();
+    });
+    overlay.querySelector("[data-media-preview-close]").addEventListener("click", closeMediaPreview);
+    overlay.querySelector(".media-preview-actions").addEventListener("click", (event) => {
+      const actionButton = event.target.closest("[data-media-preview-action]");
+      if (!actionButton || !mediaPreviewState?.message) return;
+      const { message, url, name } = mediaPreviewState;
+      const action = actionButton.dataset.mediaPreviewAction;
+      if (action === "open") {
+        window.open(url, "_blank", "noopener,noreferrer");
+      } else if (action === "download") {
+        const downloadLink = document.createElement("a");
+        downloadLink.href = url;
+        downloadLink.download = name;
+        downloadLink.rel = "noopener";
+        document.body.append(downloadLink);
+        downloadLink.click();
+        downloadLink.remove();
+      } else if (action === "share") {
+        if (navigator.share) {
+          navigator.share({ title: name, url }).catch(() => {});
+        } else if (navigator.clipboard?.writeText) {
+          navigator.clipboard.writeText(url)
+            .then(() => showToast("Link copied. You can paste it anywhere."))
+            .catch(() => showToast("Sharing isn't available in this browser."));
+        } else {
+          showToast("Sharing isn't available in this browser.");
+        }
+      } else if (action === "forward") {
+        openForwardMessage(message);
+      }
+    });
+    document.body.appendChild(overlay);
+    return overlay;
+  }
+
+  let mediaPreviewState = null;
+
+  function closeMediaPreview() {
+    const overlay = document.getElementById("media-preview-backdrop");
+    if (!overlay) return;
+    overlay.hidden = true;
+    overlay.querySelector(".media-preview-content").replaceChildren();
+    mediaPreviewState = null;
+  }
+
+  async function openMediaPreview(messageId) {
+    const message = messagesById.get(String(messageId));
+    if (!message || !message.attachment_path) return;
+    const url = await resolveAttachmentUrl(message);
+    if (!url) {
+      showToast("This attachment is unavailable.");
+      return;
+    }
+    const overlay = ensureMediaPreview();
+    const content = overlay.querySelector(".media-preview-content");
+    const title = overlay.querySelector("#media-preview-title");
+    const safeName = escapeHtml(message.attachment_name || "Attachment");
+    title.textContent = message.attachment_name || "Attachment";
+    content.replaceChildren();
+    if (message.attachment_type?.startsWith("image/")) {
+      content.innerHTML = `<img src="${escapeHtml(url)}" alt="${safeName}" />`;
+    } else if (message.attachment_type?.startsWith("video/")) {
+      content.innerHTML = `<video controls playsinline src="${escapeHtml(url)}">Your browser can't play this video.</video>`;
+    } else if (message.attachment_type?.startsWith("audio/")) {
+      content.innerHTML = `<audio controls src="${escapeHtml(url)}">Your browser can't play this audio.</audio>`;
+    } else {
+      content.innerHTML = `<div class="attachment-preview-file"><span class="file-attachment-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M13 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10Z" /><path d="M13 3v7h7M8 15h8M8 18h5" /></svg></span><span><strong>${safeName}</strong><small>${escapeHtml(message.attachment_type || "File")} · ${formatFileSize(message.attachment_size || 0)}</small></span></div>`;
+    }
+    mediaPreviewState = { message, url, name: message.attachment_name || "Attachment" };
+    overlay.hidden = false;
+  }
+
+  async function renderAttachment(message) {
+    if (!message.attachment_path) return "";
+    const signedUrl = await resolveAttachmentUrl(message);
+    if (!signedUrl) {
       return '<div class="attachment-missing">This attachment is unavailable.</div>';
     }
-    const safeUrl = escapeHtml(signedUrl.url);
+    const safeUrl = escapeHtml(signedUrl);
     const safeName = escapeHtml(message.attachment_name || "Attachment");
-    if (message.attachment_type.startsWith("image/")) {
-      return `<a class="message-attachment image-attachment" href="${safeUrl}" target="_blank" rel="noopener"><img src="${safeUrl}" alt="${safeName}" loading="lazy"></a>`;
+    const attachmentType = String(message.attachment_type || "");
+    if (attachmentType.startsWith("image/")) {
+      return `<button class="message-attachment image-attachment media-preview-button" type="button" data-media-preview="${escapeHtml(String(message.id))}" data-media-name="${safeName}" data-media-url="${safeUrl}" aria-label="Open ${safeName}"><img src="${safeUrl}" alt="${safeName}" loading="lazy"></button>`;
     }
-    if (message.attachment_type.startsWith("video/")) {
-      return `<video class="message-attachment video-attachment" controls preload="metadata" src="${safeUrl}">${escapeHtml("Your browser can't play this video.")}</video>`;
+    if (attachmentType.startsWith("video/")) {
+      return `<button class="message-attachment video-attachment media-preview-button" type="button" data-media-preview="${escapeHtml(String(message.id))}" data-media-name="${safeName}" data-media-url="${safeUrl}" aria-label="Open ${safeName}"><video controls preload="metadata" src="${safeUrl}">${escapeHtml("Your browser can't play this video.")}</video></button>`;
     }
-    if (message.attachment_type.startsWith("audio/")) {
-      return `<audio class="message-audio" controls preload="metadata" src="${safeUrl}">${escapeHtml("Your browser can't play this audio.")}</audio>`;
+    if (attachmentType.startsWith("audio/")) {
+      return `<button class="message-audio media-preview-button" type="button" data-media-preview="${escapeHtml(String(message.id))}" data-media-name="${safeName}" data-media-url="${safeUrl}" aria-label="Open ${safeName}"><audio controls preload="metadata" src="${safeUrl}">${escapeHtml("Your browser can't play this audio.")}</audio></button>`;
     }
-    return `<a class="file-attachment" href="${safeUrl}" download="${safeName}">
+    return `<button class="file-attachment media-preview-button" type="button" data-media-preview="${escapeHtml(String(message.id))}" data-media-name="${safeName}" data-media-url="${safeUrl}" aria-label="Open ${safeName}">
       <span class="file-attachment-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M13 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10Z" /><path d="M13 3v7h7M8 15h8M8 18h5" /></svg></span>
       <span class="file-attachment-details"><strong>${safeName}</strong><small>${formatFileSize(message.attachment_size || 0)}</small></span>
-      <span class="file-download-label">Download</span>
-    </a>`;
+      <span class="file-download-label">Open</span>
+    </button>`;
   }
 
   function updateConversationPresenceStatus() {
@@ -1961,6 +2075,7 @@
     els.conversationEmpty.hidden = hasActiveChat;
     els.activeConversation.hidden = !hasActiveChat;
     els.chatScreen.classList.toggle("mobile-chat-open", hasActiveChat);
+    els.voiceNoteButton.disabled = !hasActiveChat;
     if (hasActiveChat) renderMessages();
     renderChats();
   }
@@ -1982,6 +2097,7 @@
     stopTyping();
     window.clearTimeout(remoteTypingTimer);
     els.typingIndicator.hidden = true;
+    if (voiceRecording) cancelVoiceNoteRecording();
     activeChat = "";
     activeContact = null;
     if (messageChannel) {
@@ -2805,6 +2921,83 @@
     els.attachmentButton.focus();
   }
 
+  function setVoiceNoteButtonState(isRecording) {
+    voiceRecording = isRecording;
+    els.voiceNoteButton.classList.toggle("is-recording", isRecording);
+    els.voiceNoteButton.setAttribute("aria-pressed", String(isRecording));
+    els.voiceNoteButton.title = isRecording ? "Stop voice note" : "Record a voice note";
+    els.voiceNoteButton.setAttribute("aria-label", isRecording ? "Stop recording voice note" : "Record a voice note");
+  }
+
+  function cancelVoiceNoteRecording() {
+    if (voiceNoteStream) {
+      voiceNoteStream.getTracks().forEach((track) => track.stop());
+      voiceNoteStream = null;
+    }
+    if (voiceMediaRecorder) {
+      voiceMediaRecorder.onstop = null;
+      if (voiceMediaRecorder.state !== "inactive") voiceMediaRecorder.stop();
+    }
+    voiceMediaRecorder = null;
+    voiceNoteChunks = [];
+    setVoiceNoteButtonState(false);
+  }
+
+  function stopVoiceNote() {
+    if (!voiceMediaRecorder || voiceMediaRecorder.state === "inactive") return;
+    voiceMediaRecorder.stop();
+  }
+
+  async function startVoiceNote() {
+    if (!activeChat) {
+      showToast("Open a conversation before recording a voice note.");
+      return;
+    }
+    if (voiceRecording) {
+      stopVoiceNote();
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || typeof window.MediaRecorder === "undefined") {
+      showToast("Voice notes need a supported browser and microphone access.");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      voiceNoteStream = stream;
+      voiceNoteChunks = [];
+      const recorder = new MediaRecorder(stream);
+      voiceMediaRecorder = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) voiceNoteChunks.push(event.data);
+      };
+      recorder.onstop = () => {
+        const mimeType = recorder.mimeType || "audio/webm";
+        const blob = new Blob(voiceNoteChunks, { type: mimeType });
+        if (voiceNoteStream) {
+          voiceNoteStream.getTracks().forEach((track) => track.stop());
+          voiceNoteStream = null;
+        }
+        voiceMediaRecorder = null;
+        voiceNoteChunks = [];
+        setVoiceNoteButtonState(false);
+        if (!blob.size) {
+          showToast("Your voice note was empty. Try recording again.");
+          return;
+        }
+        const extension = mimeType.includes("mp4") ? "m4a" : mimeType.includes("ogg") ? "ogg" : "webm";
+        const file = new File([blob], `voice-note.${extension}`, { type: mimeType });
+        showAttachmentPreview(file);
+      };
+      recorder.start();
+      setVoiceNoteButtonState(true);
+      showToast("Recording… tap the mic again to stop.");
+    } catch (error) {
+      cancelVoiceNoteRecording();
+      console.error("A voice note couldn't be recorded.", error);
+      showToast(error.message || "Microphone access is required to record a voice note.");
+    }
+  }
+
   function showAttachmentPreview(file) {
     if (!file || !activeChat) return;
     if (file.size > MAX_ATTACHMENT_SIZE) {
@@ -3008,7 +3201,7 @@
       els.resetPasswordStep.hidden = false;
       window.setTimeout(() => els.resetPassword.focus(), 0);
     } catch (error) {
-      els.resetCodeError.textContent = error.message || "That code couldn't be verified. Check your connection and try again.";
+      setFieldError(els.resetCodeError, error.message || "That code couldn't be verified. Check your connection and try again.");
     } finally {
       submitButton.disabled = false;
     }
@@ -3017,17 +3210,17 @@
   els.resetPasswordForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (!recoveryChallenge?.verified) {
-      els.resetPasswordError.textContent = "Verify your email recovery code first.";
+      setFieldError(els.resetPasswordError, "Verify your email recovery code first.");
       return;
     }
     const password = els.resetPassword.value;
     if (password.length < 8 || password.length > 128) {
-      els.resetPasswordError.textContent = "Choose a password between 8 and 128 characters.";
+      setFieldError(els.resetPasswordError, "Choose a password between 8 and 128 characters.");
       els.resetPassword.focus();
       return;
     }
     if (password !== els.resetPasswordConfirm.value) {
-      els.resetPasswordError.textContent = "The passwords don't match.";
+      setFieldError(els.resetPasswordError, "The passwords don't match.");
       els.resetPasswordConfirm.focus();
       return;
     }
@@ -3044,7 +3237,7 @@
       showToast("Your password has been changed. Log in with your new password.");
       els.loginPassword.focus();
     } catch (error) {
-      els.resetPasswordError.textContent = error.message || "Your password couldn't be changed. Try again.";
+      setFieldError(els.resetPasswordError, error.message || "Your password couldn't be changed. Try again.");
     } finally {
       els.resetPasswordSubmit.disabled = false;
     }
@@ -3122,7 +3315,6 @@
   els.themeToggle.addEventListener("click", () => {
     setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
   });
-  els.refreshAppButton.addEventListener("click", () => checkForAppUpdates(els.refreshAppButton));
   els.checkUpdatesButton.addEventListener("click", () => {
     els.accountMenu.classList.remove("is-visible");
     els.accountButton.setAttribute("aria-expanded", "false");
@@ -3135,6 +3327,7 @@
     sendMessage(els.messageInput.value);
   });
 
+  els.voiceNoteButton.addEventListener("click", startVoiceNote);
   els.attachmentButton.addEventListener("click", () => els.attachmentInput.click());
   els.attachmentInput.addEventListener("change", () => {
     const file = els.attachmentInput.files[0];
@@ -3149,6 +3342,8 @@
   });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && !els.attachmentPreviewBackdrop.hidden) closeAttachmentPreview();
+    if (event.key === "Escape" && !document.getElementById("media-preview-backdrop")?.hidden) closeMediaPreview();
+    if (event.key === "Escape" && voiceRecording) cancelVoiceNoteRecording();
   });
 
   els.messageInput.addEventListener("input", () => {
@@ -3165,6 +3360,8 @@
       sendMessage(els.messageInput.value);
     }
   });
+
+  els.voiceNoteButton.disabled = true;
 
   els.emojiPicker.innerHTML = EMOJI_CHOICES.map((emoji) => (
     `<button type="button" data-emoji="${emoji}" aria-label="${emoji}">${emoji}</button>`
@@ -3192,18 +3389,25 @@
     openConversation(button.dataset.userId);
   });
 
-  els.messageList.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-message-action]");
-    if (!button) return;
-    const message = messagesById.get(button.dataset.messageId);
+  els.messageList.addEventListener("click", async (event) => {
+    const mediaButton = event.target.closest("[data-media-preview]");
+    if (mediaButton) {
+      event.preventDefault();
+      await openMediaPreview(mediaButton.dataset.mediaPreview);
+      return;
+    }
+
+    const messageButton = event.target.closest("[data-message-action]");
+    if (!messageButton) return;
+    const message = messagesById.get(messageButton.dataset.messageId);
     if (!message) return;
-    const details = button.closest("details");
+    const details = messageButton.closest("details");
     if (details) details.open = false;
     const actions = messageActionsById.get(String(message.id)) || [];
     const ownAction = actions.find((action) => action.user_id === currentUserId);
-    const action = button.dataset.messageAction;
+    const action = messageButton.dataset.messageAction;
     if (action === "delete") {
-      deleteMessage(button.dataset.messageId);
+      deleteMessage(messageButton.dataset.messageId);
     } else if (action === "reply") {
       setReplyTarget(message);
     } else if (action === "copy") {
@@ -3218,7 +3422,7 @@
     } else if (action === "info") {
       showMessageInfo(message);
     } else if (action === "react") {
-      const reaction = button.dataset.reaction;
+      const reaction = messageButton.dataset.reaction;
       saveMessageAction(message, { reaction: ownAction?.reaction === reaction ? null : reaction });
     } else if (action === "pin") {
       saveMessageAction(message, { is_pinned: !ownAction?.is_pinned });
@@ -3234,6 +3438,11 @@
     if (!els.emojiPicker.contains(event.target) && !els.emojiButton.contains(event.target)) {
       els.emojiPicker.hidden = true;
       els.emojiButton.setAttribute("aria-expanded", "false");
+    }
+    if (!event.target.closest(".message-actions") && !event.target.closest(".message-actions-menu")) {
+      document.querySelectorAll(".message-actions[open]").forEach((details) => {
+        details.open = false;
+      });
     }
   });
   els.closeForwardButton.addEventListener("click", () => {

@@ -9,10 +9,10 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <title>Kindred — messages, made simple</title>
     <meta name="description" content="Kindred is a simple messaging app for chatting with friends and family. Create a free account with your own email address to send messages and files." />
-    <link rel="manifest" href="manifest.webmanifest?v=17" />
-    <link rel="icon" href="icons/kindred.svg?v=17" type="image/svg+xml" />
-    <link rel="apple-touch-icon" href="icons/kindred-192.png?v=17" />
-    <link rel="stylesheet" href="styles.css?v=17" />
+    <link rel="manifest" href="manifest.webmanifest?v=18" />
+    <link rel="icon" href="icons/kindred.svg?v=18" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="icons/kindred-192.png?v=18" />
+    <link rel="stylesheet" href="styles.css?v=18" />
   </head>
   <body>
     <main id="app" class="app-shell">
@@ -21,7 +21,6 @@
         <svg class="theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.2 15.4A8.5 8.5 0 0 1 8.6 3.8 8.5 8.5 0 1 0 20.2 15.4Z" /></svg>
       </button>
       <section id="login-screen" class="login-screen" aria-labelledby="login-title">
-        <button id="refresh-app-button" class="refresh-app-button" type="button">Refresh app</button>
         <div class="login-card">
           <a class="brand brand-login" href="#" aria-label="Kindred home">
             <span class="brand-mark" aria-hidden="true">
@@ -201,6 +200,9 @@
             <form id="message-form" class="composer">
               <input id="attachment-input" class="visually-hidden" type="file" aria-label="Choose a photo, video, audio, or other file" />
               <button id="emoji-button" class="icon-button emoji-button" type="button" aria-label="Choose emoji" title="Choose emoji">☺</button>
+              <button id="voice-note-button" class="icon-button voice-note-button" type="button" aria-label="Record a voice note" title="Record a voice note" aria-pressed="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 1 1-6 0V6a3 3 0 0 1 3-3Z" /><path d="M19 11a7 7 0 0 1-14 0M12 18v3M8 21h8" /></svg>
+              </button>
               <button id="attachment-button" class="icon-button attachment-button" type="button" aria-label="Attach a photo, video, audio, or file" title="Attach photo, video, audio, or file">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21.4 11.1-8.9 8.8a6 6 0 0 1-8.5-8.4l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5" /></svg>
               </button>
@@ -407,7 +409,7 @@
     <button id="install-app-button" class="install-app-button" type="button" hidden>Install Kindred</button>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.min.js" integrity="sha384-dl/4LkSyQ4uEucc48NM6VDZLAjLLq9yMzZ5JLXumBq7Ld33XBof73hseOqPhO89+" crossorigin="anonymous"></script>
     <script src="supabase-config.js"></script>
-    <script src="pwa.js?v=17"></script>
-    <script src="app.js?v=17"></script>
+    <script src="pwa.js?v=18"></script>
+    <script src="app.js?v=18"></script>
   </body>
 </html>
