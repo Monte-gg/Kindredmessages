@@ -1914,6 +1914,32 @@
       </details>`;
   }
 
+  function positionMessageActionMenu(details) {
+    const summary = details.querySelector("summary");
+    const menu = details.querySelector(".message-actions-menu");
+    if (!summary || !menu || !details.open) return;
+
+    menu.style.left = "0px";
+    menu.style.top = "0px";
+    const anchor = summary.getBoundingClientRect();
+    const bounds = menu.getBoundingClientRect();
+    const padding = 8;
+    const left = Math.max(padding, Math.min(anchor.right - bounds.width, window.innerWidth - bounds.width - padding));
+    const above = anchor.top - padding;
+    const below = window.innerHeight - anchor.bottom - padding;
+    const placeAbove = bounds.height <= above || above >= below;
+    const top = placeAbove
+      ? Math.max(padding, anchor.top - bounds.height - 6)
+      : Math.min(window.innerHeight - bounds.height - padding, anchor.bottom + 6);
+
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+  }
+
+  function repositionOpenMessageActionMenus() {
+    document.querySelectorAll(".message-actions[open]").forEach(positionMessageActionMenu);
+  }
+
   async function renderMessagesNow() {
     if (!activeChat || !activeContact) return;
     const request = ++messagesRenderVersion;
@@ -3439,12 +3465,26 @@
       els.emojiPicker.hidden = true;
       els.emojiButton.setAttribute("aria-expanded", "false");
     }
+    const actionSummary = event.target.closest(".message-actions summary");
+    if (actionSummary) {
+      window.requestAnimationFrame(() => {
+        const details = actionSummary.closest(".message-actions");
+        if (!details?.open) return;
+        document.querySelectorAll(".message-actions[open]").forEach((openMenu) => {
+          if (openMenu !== details) openMenu.open = false;
+        });
+        positionMessageActionMenu(details);
+      });
+      return;
+    }
     if (!event.target.closest(".message-actions") && !event.target.closest(".message-actions-menu")) {
       document.querySelectorAll(".message-actions[open]").forEach((details) => {
         details.open = false;
       });
     }
   });
+  els.messageList.addEventListener("scroll", repositionOpenMessageActionMenus);
+  window.addEventListener("resize", repositionOpenMessageActionMenus);
   els.closeForwardButton.addEventListener("click", () => {
     els.forwardBackdrop.hidden = true;
     forwardTarget = null;

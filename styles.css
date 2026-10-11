@@ -338,7 +338,7 @@ kbd { display: inline-grid; min-width: 17px; height: 18px; place-items: center; 
 .message-actions summary::-webkit-details-marker { display: none; }
 .message-actions summary:hover, .message-actions summary:focus-visible { background: var(--surface-tint); color: var(--green-dark); opacity: 1; transform: translateY(-1px); }
 .message-row:hover .message-actions summary, .message-actions:focus-within summary, .message-actions[open] summary { background: var(--surface-tint); color: var(--green-dark); opacity: 1; }
-.message-actions-menu { position: absolute; z-index: 4; right: 0; left: auto; bottom: 26px; display: grid; width: min(170px, calc(100vw - 24px)); max-width: min(170px, calc(100vw - 24px)); padding: 5px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow); transform-origin: bottom right; }
+.message-actions-menu { position: fixed; z-index: 8; right: auto; bottom: auto; left: 0; top: 0; display: grid; width: min(190px, calc(100vw - 16px)); max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); overflow-y: auto; padding: 6px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow); }
 .message-actions-menu button { padding: 8px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); text-align: left; cursor: pointer; font-size: 10px; }
 .message-actions-menu button:hover { background: var(--surface-tint); color: var(--green-dark); }
 .message-actions-menu button.is-danger { color: #b3344b; }
@@ -493,7 +493,7 @@ body:has(.chat-screen:not([hidden])) .install-app-button { display: none; }
   .typing-indicator { padding-right: 16px; padding-left: 16px; }
   .composer { gap: 5px; padding: 10px 12px 4px; }
   .emoji-button, .voice-note-button, .attachment-button { width: 37px; height: 38px; flex-shrink: 0; }
-  .message-actions-menu { left: auto; right: 0; width: min(160px, calc(100vw - 24px)); max-width: calc(100vw - 24px); }
+  .message-actions-menu { width: min(190px, calc(100vw - 16px)); max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); }
   .local-chat-note { margin-bottom: 8px; }
   .chat-list { padding: 0 13px 12px; }
   .sidebar-title-row { padding: 22px 22px 14px; }
