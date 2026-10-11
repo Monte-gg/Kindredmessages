@@ -91,9 +91,10 @@ VPS may require a paid account and payment details.
 
 1. Create an Ubuntu 24.04 VPS in Johannesburg with a public IPv4 address.
    A provider such as Vultr offers this region; compare its current server and
-   data-transfer prices before creating the VPS. Point a DNS hostname such as
-   `turn.example.com` at the VPS IP. Replace `example.com` with a domain you
-   control.
+   data-transfer prices before creating the VPS. For a free hostname, create a
+   subdomain such as `kindred-call-relay.duckdns.org` at DuckDNS and set its
+   IPv4 address to the VPS public IP. Keep any DuckDNS account token private;
+   it is not needed by Kindred or Supabase for a VPS with a fixed IP.
 2. In the provider firewall, allow UDP and TCP `3478`, TCP `443`, and UDP
    `49160-49259`. Keep TCP `443` free on this VPS for TURN-over-TLS.
 3. Connect to the server over SSH and install Coturn and Certbot:
@@ -101,12 +102,13 @@ VPS may require a paid account and payment details.
    ```sh
    sudo apt update
    sudo apt install -y coturn certbot
-   sudo certbot certonly --standalone -d turn.example.com
+   sudo certbot certonly --standalone -d kindred-call-relay.duckdns.org
    ```
 
-   Replace the hostname with your real DNS name. Certbot needs inbound TCP
-   `80` for validation; allow it temporarily in the provider firewall and
-   Ubuntu firewall, then keep it open for automatic certificate renewal.
+   Use your chosen DuckDNS hostname. Certbot needs inbound TCP `80` for
+   validation; allow it temporarily in the provider firewall and Ubuntu
+   firewall. For automatic certificate renewal, keep it open or configure a
+   renewal hook that briefly frees port `80`.
 4. Allow the TURN and relay ports in Ubuntu's firewall. If UFW is enabled,
    allow SSH before enabling it so you do not lock yourself out:
 
@@ -120,14 +122,16 @@ VPS may require a paid account and payment details.
    ```
 
 5. Copy `infra/coturn/turnserver.conf.example` to `/etc/turnserver.conf`.
-   Replace `turn.example.com` and the certificate paths with your hostname.
+   Replace `turn.example.com` and the certificate paths with your DuckDNS
+   hostname (for example, `kindred-call-relay.duckdns.org`).
    Generate a strong secret with `openssl rand -hex 32`; set it as Coturn's
    `static-auth-secret` and keep a private copy for Supabase. Do not commit it
    or send it in chat. Edit `/etc/default/coturn` and set
    `TURNSERVER_ENABLED=1`, then run `sudo systemctl enable --now coturn`.
 6. In the Supabase dashboard for project `cpobteauoiptthjihhfl`, open
    **Project Settings > Edge Functions > Secrets** and add:
-   - `TURN_HOST` — the hostname only, such as `turn.example.com`.
+   - `TURN_HOST` — the hostname only, such as
+     `kindred-call-relay.duckdns.org`.
    - `TURN_SHARED_SECRET` — the same random value as Coturn's
      `static-auth-secret`.
 7. Deploy `supabase/functions/kindred-turn-credentials` to that Supabase
