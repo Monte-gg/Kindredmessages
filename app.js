@@ -815,12 +815,12 @@
   async function showIncomingCallNotification(call) {
     if (!notificationsEnabled || !("Notification" in window) || Notification.permission !== "granted") return;
     const registration = await navigator.serviceWorker.ready;
-    await registration.showNotification(`${call.profile.username} is calling`, {
-      body: "Incoming audio call — open Kindred to answer.",
+    await registration.showNotification("Incoming call · Kindred", {
+      body: `Audio call from ${call.profile.username}. Open Kindred to answer.`,
       icon: "./icons/kindred-192.png",
       badge: "./icons/kindred-192.png",
       tag: `kindred-call-${call.id}`,
-      renotify: true,
+      renotify: false,
       silent: false,
       vibrate: [350, 120, 350, 700],
       data: {
@@ -1398,20 +1398,13 @@
         contact = data;
         if (contact) profilesById.set(contact.user_id, contact);
       }
-      const senderName = contact?.username || "New message";
-      const body = message.content?.trim()
-        ? message.content.trim().slice(0, 140)
-        : message.attachment_type?.startsWith("image/") ? "Sent you a photo"
-          : message.attachment_type?.startsWith("video/") ? "Sent you a video"
-            : message.attachment_type?.startsWith("audio/") ? "Sent you an audio message"
-              : message.attachment_name ? `Sent a file: ${message.attachment_name.slice(0, 100)}`
-                : "Sent you a message";
-      await registration.showNotification(senderName, {
-        body,
+      const senderName = contact?.username || "A Kindred member";
+      await registration.showNotification("New message · Kindred", {
+        body: `${senderName} sent you a message.`,
         icon: "./icons/kindred-192.png",
         badge: "./icons/kindred-192.png",
         tag: `kindred-message-${message.conversation_id}`,
-        renotify: true,
+        renotify: false,
         data: {
           userId: message.sender_id,
           conversationId: message.conversation_id,

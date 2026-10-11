@@ -1,14 +1,14 @@
-const CACHE_NAME = "kindred-shell-v11";
+const CACHE_NAME = "kindred-shell-v12";
 const APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=11",
-  "./app.js?v=11",
+  "./styles.css?v=12",
+  "./app.js?v=12",
   "./supabase-config.js",
-  "./manifest.webmanifest?v=11",
-  "./icons/kindred-192.png?v=11",
-  "./icons/kindred-512.png?v=11",
-  "./icons/kindred.svg?v=11",
+  "./manifest.webmanifest?v=12",
+  "./icons/kindred-192.png?v=12",
+  "./icons/kindred-512.png?v=12",
+  "./icons/kindred.svg?v=12",
 ];
 
 self.addEventListener("install", (event) => {

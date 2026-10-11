@@ -109,8 +109,9 @@ or **Later** to keep using the current version until you're ready.
 
 After signing in, open the account menu and choose **Enable message & call
 alerts**. Incoming messages use the device's normal notification appearance,
-and incoming calls ring in Kindred and show a notification when permission is
-granted. Selecting a call notification opens Kindred so you can answer.
+without revealing message text, and incoming calls ring in Kindred and show a
+notification when permission is granted. Selecting a call notification opens
+Kindred so you can answer.
 Incoming call sound depends on browser audio permissions and the device's
 notification and sound settings.
 
