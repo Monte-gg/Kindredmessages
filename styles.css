@@ -123,6 +123,9 @@ h1, h2, p { overflow-wrap: anywhere; }
 .form-error { min-height: 16px; margin: 5px 0 0; color: #bf4e4e; font-size: 11px; }
 .demo-note { display: flex; align-items: center; justify-content: center; gap: 7px; margin: 15px 0 0; color: #8c959f; font-size: 10px; text-align: center; }
 .demo-note span { color: var(--green); font-size: 14px; }
+.legal-links { margin: 8px 0 0; font-size: 10px; text-align: center; }
+.legal-links a { color: var(--green-dark); font-weight: 600; text-decoration: none; }
+.legal-links a:hover { text-decoration: underline; }
 .auth-switch { margin: 6px 0 0; color: #8c959f; font-size: 10px; text-align: center; }
 .auth-switch button { padding: 0; border: 0; background: transparent; color: var(--green-dark); cursor: pointer; font-size: inherit; font-weight: 700; }
 .auth-switch button:hover { text-decoration: underline; }
