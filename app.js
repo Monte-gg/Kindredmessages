@@ -891,10 +891,10 @@
   function startCallConnectionTimeout(call) {
     window.clearTimeout(call.connectionTimeout);
     call.connectionTimeout = window.setTimeout(() => {
-      if (activeCall !== call || call.peer?.connectionState === "connected") return;
+      if (activeCall !== call || call.connected || call.peer?.connectionState === "connected") return;
       showToast("The call couldn't connect. Your network may need a TURN relay.");
       endCall(true, "missed").catch((error) => console.error("The unconnected call couldn't be closed.", error));
-    }, 30000);
+    }, 60000);
   }
 
   async function setCallStatus(status) {
@@ -964,7 +964,9 @@
   }
 
   async function createCallPeer() {
-    if (!activeCall?.stream) throw new Error("Allow microphone access to start the call.");
+    const call = activeCall;
+    if (!call?.stream) throw new Error("Allow microphone access to start the call.");
+    if (call.peer && call.peer.connectionState !== "closed") return call.peer;
     const configuredIceServers = Array.isArray(window.KINDRED_TURN_SERVERS)
       ? window.KINDRED_TURN_SERVERS.filter((server) => (
         server && (typeof server.urls === "string" || Array.isArray(server.urls))
@@ -977,11 +979,11 @@
         ...configuredIceServers,
       ],
     });
-    activeCall.peer = peer;
-    activeCall.queuedIce = [];
-    activeCall.stream.getTracks().forEach((track) => peer.addTrack(track, activeCall.stream));
+    call.peer = peer;
+    call.queuedIce = [];
+    call.stream.getTracks().forEach((track) => peer.addTrack(track, call.stream));
     peer.onicecandidate = (event) => {
-      if (!event.candidate || !activeCall || activeCall.peer !== peer) return;
+      if (!event.candidate || activeCall !== call || call.peer !== peer) return;
       sendCallSignal("ice", { candidate: event.candidate.toJSON() })
         .then((status) => {
           if (status !== "ok") console.error("An audio call network candidate could not be sent.", status);
@@ -989,6 +991,7 @@
         .catch((error) => console.error("An audio call network candidate could not be sent.", error));
     };
     peer.ontrack = (event) => {
+      if (activeCall !== call || call.peer !== peer) return;
       els.callRemoteAudio.srcObject = event.streams[0] || new MediaStream([event.track]);
       els.callRemoteAudio.play().catch((error) => {
         console.info("The browser blocked audio playback for this call.", error);
@@ -997,23 +1000,26 @@
       });
     };
     peer.onconnectionstatechange = () => {
-      if (!activeCall || activeCall.peer !== peer) return;
+      if (activeCall !== call || call.peer !== peer) return;
       if (peer.connectionState === "connected") {
-        window.clearTimeout(activeCall.ringTimeout);
-        window.clearTimeout(activeCall.connectionTimeout);
-        stopIncomingCallAlert(activeCall);
+        call.connected = true;
+        window.clearTimeout(call.ringTimeout);
+        window.clearTimeout(call.connectionTimeout);
+        stopIncomingCallAlert(call);
         els.callStatus.textContent = "Connected";
       } else if (peer.connectionState === "disconnected") {
-        window.clearTimeout(activeCall.connectionTimeout);
-        activeCall.connectionTimeout = window.setTimeout(() => {
-          if (activeCall?.peer === peer && peer.connectionState === "disconnected") {
+        window.clearTimeout(call.connectionTimeout);
+        call.connectionTimeout = window.setTimeout(() => {
+          if (activeCall === call && call.peer === peer && peer.connectionState === "disconnected") {
             showToast("The call lost its connection.");
-            endCall(true).catch((error) => console.error("The disconnected call could not be closed.", error));
+            endCall(true, call.connected ? "ended" : "missed")
+              .catch((error) => console.error("The disconnected call could not be closed.", error));
           }
-        }, 8000);
+        }, 20000);
       } else if (peer.connectionState === "failed") {
-          showToast("The call couldn't connect. Your network may need a TURN relay.");
-        endCall(true).catch((error) => console.error("The audio call could not be closed cleanly.", error));
+        showToast("The call couldn't connect. Your network may need a TURN relay.");
+        endCall(true, call.connected ? "ended" : "missed")
+          .catch((error) => console.error("The audio call could not be closed cleanly.", error));
       }
     };
     return peer;
@@ -1037,37 +1043,45 @@
       await peer.setLocalDescription(offer);
       const status = await sendCallSignal("offer", { description: peer.localDescription });
       if (status !== "ok") throw new Error("The call offer couldn't be sent. Try again.");
+      startCallConnectionTimeout(call);
       return;
     }
     if (event === "ready" && activeCall.role === "callee") {
-      activeCall.callerReady = true;
+      const call = activeCall;
+      call.callerReady = true;
       els.callStatus.textContent = "Incoming call";
       els.callAcceptButton.disabled = false;
       return;
     }
     if (event === "offer" && activeCall.role === "callee") {
+      const call = activeCall;
       const peer = await createCallPeer();
+      if (activeCall !== call) return;
       await peer.setRemoteDescription(payload.description);
-      for (const candidate of activeCall.queuedIce) await peer.addIceCandidate(candidate);
-      activeCall.queuedIce = [];
+      for (const candidate of call.queuedIce) await peer.addIceCandidate(candidate);
+      call.queuedIce = [];
       const answer = await peer.createAnswer();
       await peer.setLocalDescription(answer);
       const status = await sendCallSignal("answer", { description: peer.localDescription });
       if (status !== "ok") throw new Error("Your call answer couldn't be sent. Try again.");
+      startCallConnectionTimeout(call);
       els.callStatus.textContent = "Connecting…";
       return;
     }
     if (event === "answer" && activeCall.role === "caller") {
-      await activeCall.peer.setRemoteDescription(payload.description);
-      for (const candidate of activeCall.queuedIce) await activeCall.peer.addIceCandidate(candidate);
-      activeCall.queuedIce = [];
+      const call = activeCall;
+      if (!call.peer) throw new Error("The call offer was lost. Try starting the call again.");
+      await call.peer.setRemoteDescription(payload.description);
+      for (const candidate of call.queuedIce) await call.peer.addIceCandidate(candidate);
+      call.queuedIce = [];
       return;
     }
     if (event === "ice" && payload.candidate) {
-      if (activeCall.peer?.remoteDescription) {
-        await activeCall.peer.addIceCandidate(payload.candidate);
+      const call = activeCall;
+      if (call.peer?.remoteDescription) {
+        await call.peer.addIceCandidate(payload.candidate);
       } else {
-        activeCall.queuedIce.push(payload.candidate);
+        call.queuedIce.push(payload.candidate);
       }
       return;
     }
@@ -1275,7 +1289,6 @@
       await setCallStatus("accepted");
       const status = await sendCallSignal("ready");
       if (status !== "ok") throw new Error("The call acceptance couldn't be sent.");
-      startCallConnectionTimeout(call);
       els.callStatus.textContent = "Connecting…";
       els.callAcceptButton.hidden = true;
       els.callDeclineButton.hidden = true;
