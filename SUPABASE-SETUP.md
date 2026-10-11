@@ -73,11 +73,43 @@ preserves conversation messages and call records.
 
 Audio calls use browser microphone permission, Supabase Realtime for private
 call signaling, and a peer-to-peer WebRTC audio connection. Both people need to
-be online in Kindred and allow microphone access; calls require HTTPS. Some
-networks block direct peer-to-peer traffic and need a TURN relay service, which
-is not configured in this project. A TURN provider must supply short-lived
-credentials through a trusted backend; do not put permanent TURN credentials
-in this public website's JavaScript.
+be online in Kindred and allow microphone access; calls require HTTPS. Networks
+that block direct peer-to-peer traffic need a TURN relay. Devices on the same
+Wi-Fi network can normally connect directly without TURN, provided the local
+network and browser allow WebRTC traffic. Kindred requests
+short-lived Cloudflare TURN credentials through the authenticated
+`kindred-turn-credentials` Supabase Edge Function; permanent provider secrets
+are never sent to the website.
+
+### Configure the Cloudflare TURN relay
+
+1. In Cloudflare, open **Realtime > TURN** (or **Calls > TURN**) and create a
+   TURN key. Copy its key ID.
+2. Create a Cloudflare API token with the **Calls Write** permission for the
+   account that owns that TURN key.
+3. In the Supabase dashboard for project `cpobteauoiptthjihhfl`, open
+   **Project Settings > Edge Functions > Secrets** and add:
+   - `CLOUDFLARE_TURN_KEY_ID` — the TURN key ID from step 1.
+   - `CLOUDFLARE_API_TOKEN` — the API token from step 2.
+   Enter secrets only in the dashboard; never put them in the website files,
+   source control, or chat.
+4. Deploy `supabase/functions/kindred-turn-credentials` to that same Supabase
+   project with the Supabase CLI:
+
+   ```text
+   supabase functions deploy kindred-turn-credentials --project-ref cpobteauoiptthjihhfl
+   ```
+
+   Leave JWT verification enabled for the function. It verifies the signed-in
+   user before requesting one-day credentials from Cloudflare.
+5. Publish the updated website and reload it. Both people in the call must use
+   the updated website. If the relay is unavailable or not configured, Kindred
+   warns you and tries a direct call; restrictive networks may still fail.
+
+TURN improves call reachability but cannot guarantee a call through every
+firewall, provider, or device. Cloudflare charges for TURN traffic when it is
+not used with their Realtime SFU; review Cloudflare's current pricing before
+using the relay heavily.
 
 ## Install Kindred like an app
 

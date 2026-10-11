@@ -9,10 +9,10 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <title>Kindred — messages, made simple</title>
     <meta name="description" content="Kindred is a simple messaging app for chatting with friends and family. Create a free account with your own email address to send messages and files." />
-    <link rel="manifest" href="manifest.webmanifest?v=13" />
-    <link rel="icon" href="icons/kindred.svg?v=13" type="image/svg+xml" />
-    <link rel="apple-touch-icon" href="icons/kindred-192.png?v=13" />
-    <link rel="stylesheet" href="styles.css?v=13" />
+    <link rel="manifest" href="manifest.webmanifest?v=14" />
+    <link rel="icon" href="icons/kindred.svg?v=14" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="icons/kindred-192.png?v=14" />
+    <link rel="stylesheet" href="styles.css?v=14" />
   </head>
   <body>
     <main id="app" class="app-shell">
@@ -298,8 +298,11 @@
             <button id="call-decline-button" class="call-end-button" type="button">Decline</button>
             <button id="call-accept-button" class="button button-primary" type="button">Accept call</button>
             <button id="call-enable-audio-button" class="call-enable-audio-button" type="button" hidden>Enable sound</button>
+            <button id="call-mute-button" class="call-control-button" type="button" aria-pressed="false" hidden>Mute microphone</button>
+            <button id="call-output-button" class="call-control-button" type="button" title="Choose an audio output device" hidden>Audio output</button>
             <button id="call-hangup-button" class="call-end-button" type="button" hidden>End call</button>
           </div>
+          <p id="call-audio-help" class="call-audio-help" hidden>Choose an earpiece or headphones if listed. On phones, use your device’s audio route controls if available.</p>
           <div id="forward-backdrop" class="modal-backdrop" hidden>
             <section class="modal-card forward-card" role="dialog" aria-modal="true" aria-labelledby="forward-title">
               <button id="close-forward-button" class="icon-button modal-close" type="button" aria-label="Close forward message">
@@ -404,7 +407,7 @@
     <button id="install-app-button" class="install-app-button" type="button" hidden>Install Kindred</button>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.min.js" integrity="sha384-dl/4LkSyQ4uEucc48NM6VDZLAjLLq9yMzZ5JLXumBq7Ld33XBof73hseOqPhO89+" crossorigin="anonymous"></script>
     <script src="supabase-config.js"></script>
-    <script src="pwa.js?v=13"></script>
-    <script src="app.js?v=13"></script>
+    <script src="pwa.js?v=14"></script>
+    <script src="app.js?v=14"></script>
   </body>
 </html>

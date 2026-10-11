@@ -79,6 +79,9 @@
     callStatus: $("#call-status"),
     callRemoteAudio: $("#call-remote-audio"),
     callEnableAudioButton: $("#call-enable-audio-button"),
+    callMuteButton: $("#call-mute-button"),
+    callOutputButton: $("#call-output-button"),
+    callAudioHelp: $("#call-audio-help"),
     callAcceptButton: $("#call-accept-button"),
     callDeclineButton: $("#call-decline-button"),
     callHangupButton: $("#call-hangup-button"),
@@ -785,6 +788,12 @@
     els.callAcceptButton.hidden = !incoming;
     els.callAcceptButton.disabled = incoming;
     els.callEnableAudioButton.hidden = true;
+    els.callMuteButton.hidden = true;
+    els.callMuteButton.disabled = true;
+    els.callMuteButton.textContent = "Mute microphone";
+    els.callMuteButton.setAttribute("aria-pressed", "false");
+    els.callOutputButton.hidden = true;
+    els.callAudioHelp.hidden = true;
     els.callDeclineButton.hidden = !incoming;
     els.callDeclineButton.disabled = incoming;
     els.callHangupButton.hidden = incoming;
@@ -963,6 +972,35 @@
     for (const signal of data || []) await processCallSignal(signal);
   }
 
+  async function getCallTurnServers(call) {
+    if (Array.isArray(call.turnIceServers)) return call.turnIceServers;
+    try {
+      const { data, error } = await supabaseClient.functions.invoke("kindred-turn-credentials");
+      if (error) throw error;
+      const iceServers = Array.isArray(data?.iceServers)
+        ? data.iceServers.filter((server) => {
+          if (!server || (typeof server.urls !== "string" && !Array.isArray(server.urls))) return false;
+          const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+          const needsCredentials = urls.some((url) => typeof url === "string" && /^turns?:/i.test(url));
+          return !needsCredentials
+            || (typeof server.username === "string" && typeof server.credential === "string");
+        })
+        : [];
+      if (!iceServers.some((server) => {
+        const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+        return urls.some((url) => typeof url === "string" && /^turns?:/i.test(url));
+      })) {
+        throw new Error("The relay service returned no TURN servers.");
+      }
+      call.turnIceServers = iceServers;
+    } catch (error) {
+      console.error("Kindred couldn't get temporary TURN credentials.", error);
+      call.turnIceServers = [];
+      showToast("TURN relay is unavailable. Trying a direct call; some networks may not connect.");
+    }
+    return call.turnIceServers;
+  }
+
   async function createCallPeer() {
     const call = activeCall;
     if (!call?.stream) throw new Error("Allow microphone access to start the call.");
@@ -972,16 +1010,26 @@
         server && (typeof server.urls === "string" || Array.isArray(server.urls))
       ))
       : [];
+    const turnIceServers = await getCallTurnServers(call);
+    if (activeCall !== call) throw new Error("The call has ended.");
     const peer = new RTCPeerConnection({
       iceServers: [
         { urls: "stun:stun.cloudflare.com:3478" },
         { urls: "stun:stun.l.google.com:19302" },
         ...configuredIceServers,
+        ...turnIceServers,
       ],
     });
     call.peer = peer;
     call.queuedIce = [];
     call.stream.getTracks().forEach((track) => peer.addTrack(track, call.stream));
+    const audioTracks = call.stream.getAudioTracks();
+    els.callMuteButton.hidden = audioTracks.length === 0;
+    els.callMuteButton.disabled = audioTracks.length === 0;
+    els.callMuteButton.setAttribute("aria-pressed", "false");
+    els.callMuteButton.textContent = "Mute microphone";
+    els.callOutputButton.hidden = false;
+    els.callAudioHelp.hidden = false;
     peer.onicecandidate = (event) => {
       if (!event.candidate || activeCall !== call || call.peer !== peer) return;
       sendCallSignal("ice", { candidate: event.candidate.toJSON() })
@@ -1328,6 +1376,9 @@
     if (call.peer) call.peer.close();
     els.callRemoteAudio.srcObject = null;
     els.callEnableAudioButton.hidden = true;
+    els.callMuteButton.hidden = true;
+    els.callOutputButton.hidden = true;
+    els.callAudioHelp.hidden = true;
     els.callBackdrop.hidden = true;
     if (callRoomChannel) {
       const channel = callRoomChannel;
@@ -3231,6 +3282,51 @@
     } catch (error) {
       console.error("Call audio playback is still blocked.", error);
       showToast("Audio is blocked by your browser or device. Check your sound settings and try again.");
+    }
+  });
+  els.callMuteButton.addEventListener("click", () => {
+    const tracks = activeCall?.stream?.getAudioTracks() || [];
+    if (!tracks.length) {
+      showToast("Your microphone is not ready yet.");
+      return;
+    }
+    const muted = tracks[0].enabled;
+    tracks.forEach((track) => { track.enabled = !muted; });
+    els.callMuteButton.textContent = muted ? "Unmute microphone" : "Mute microphone";
+    els.callMuteButton.setAttribute("aria-pressed", String(muted));
+    els.callStatus.textContent = muted ? "Microphone muted" : activeCall.connected ? "Connected" : "Connecting…";
+  });
+  els.callOutputButton.addEventListener("click", async () => {
+    const audio = els.callRemoteAudio;
+    if (typeof audio.setSinkId !== "function") {
+      showToast("Your browser manages speaker and earpiece routing. Use your device’s audio controls.");
+      return;
+    }
+    try {
+      if (typeof navigator.mediaDevices?.selectAudioOutput === "function") {
+        const device = await navigator.mediaDevices.selectAudioOutput();
+        await audio.setSinkId(device.deviceId);
+        els.callOutputButton.textContent = device.label || "Audio output selected";
+      } else {
+        const outputs = (await navigator.mediaDevices.enumerateDevices())
+          .filter((device) => device.kind === "audiooutput");
+        if (outputs.length < 2) {
+          showToast("No alternate audio output is available. Use your device’s audio controls.");
+          return;
+        }
+        const currentIndex = outputs.findIndex((device) => device.deviceId === audio.sinkId);
+        const firstAlternate = outputs.findIndex((device) => device.deviceId !== "default");
+        const nextIndex = currentIndex < 0
+          ? Math.max(firstAlternate, 0)
+          : (currentIndex + 1) % outputs.length;
+        const nextDevice = outputs[nextIndex];
+        await audio.setSinkId(nextDevice.deviceId);
+        els.callOutputButton.textContent = nextDevice.label || "Audio output selected";
+      }
+    } catch (error) {
+      if (error.name === "NotAllowedError" || error.name === "AbortError") return;
+      console.error("The call audio output could not be changed.", error);
+      showToast("The audio output couldn't be changed. Check your browser and device settings.");
     }
   });
   els.callDeclineButton.addEventListener("click", async () => {

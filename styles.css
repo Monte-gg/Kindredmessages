@@ -401,6 +401,9 @@ body:has(.chat-screen:not([hidden])) .install-app-button { display: none; }
 .call-end-button { border: 1px solid #e8c8ce; background: #fff4f6; color: #9c3048; }
 .call-end-button:hover { background: #f9e6eb; }
 .call-enable-audio-button { border: 1px solid var(--border); background: var(--surface-soft); color: var(--green-dark); }
+.call-control-button { border: 1px solid var(--border); background: var(--surface-soft); color: var(--ink); }
+.call-control-button[aria-pressed="true"] { border-color: #e8c8ce; background: #fff4f6; color: #9c3048; }
+.call-audio-help { margin: 12px 0 0; color: var(--text-muted); font-size: 10px; line-height: 1.5; }
 .call-actions button:disabled { cursor: wait; opacity: .6; }
 .conversation-panel { position: relative; }
 .forward-card .input-wrap { width: 100%; }
