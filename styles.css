@@ -260,6 +260,9 @@ kbd { display: inline-grid; min-width: 17px; height: 18px; place-items: center; 
 .file-download-label { color: var(--green-dark); font-size: 9px; font-weight: 700; }
 .attachment-missing { color: #9a7777; font-size: 10px; }
 .message-meta { display: flex; align-self: flex-end; align-items: center; gap: 6px; margin: 4px 2px 0; color: #a2aaa7; font-size: 8px; }
+.message-delete-button { min-height: 28px; padding: 4px 10px; border: 1px solid #f1cbd3; border-radius: 7px; background: #fff4f6; color: #a32d49; cursor: pointer; font: inherit; font-size: 10px; font-weight: 700; }
+.message-delete-button:hover { border-color: #df9eac; background: #fae9ed; color: #8f1f38; }
+.message-delete-button:disabled { cursor: wait; opacity: .6; }
 .read-receipt { display: inline-flex; width: 15px; height: 12px; flex: 0 0 auto; align-items: center; color: #8b95a5; vertical-align: -2px; }
 .read-receipt svg { display: block; width: 15px; height: 11px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
 .read-receipt.is-read { color: #2563eb; }
@@ -456,6 +459,8 @@ html[data-theme="dark"] .message-bubble { border-color: var(--border); backgroun
 html[data-theme="dark"] .is-mine .message-bubble { border-color: #3b5947; background: #2b4034; }
 html[data-theme="dark"] .file-attachment { border-color: var(--border); background: #252e29; }
 html[data-theme="dark"] .file-attachment:hover { background: #2c3730; }
+html[data-theme="dark"] .message-delete-button { border-color: #63414b; background: #36262d; color: #ffb2c1; }
+html[data-theme="dark"] .message-delete-button:hover { background: #432b32; color: #ffd4dc; }
 html[data-theme="dark"] .file-attachment-details small,
 html[data-theme="dark"] .message-meta,
 html[data-theme="dark"] .message-sender { color: var(--text-muted); }

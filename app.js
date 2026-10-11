@@ -757,7 +757,11 @@
     }
     await openConversation(userId);
     pendingNotificationOpen = null;
-    window.history.replaceState({}, "", window.location.pathname + window.location.hash);
+    try {
+      window.history.replaceState(window.history.state, "", window.location.pathname + window.location.hash);
+    } catch (error) {
+      console.warn("The notification link couldn't be removed from the page address.", error);
+    }
     els.messageInput.focus();
   }
 
@@ -1022,10 +1026,10 @@
         const isMine = message.sender_id === currentUserId;
         const attachment = await renderAttachment(message);
         renderedMessages.push(`${dayLabel ? `<div class="message-day">${escapeHtml(dayLabel)}</div>` : ""}
-          <article class="message-row${isMine ? " is-mine" : ""}">
+          <article class="message-row${isMine ? " is-mine" : ""}" data-message-row="${escapeHtml(String(message.id))}">
             ${!isMine ? `<span class="message-sender">${escapeHtml(contactName(message.sender_id))}</span>` : ""}
             <div class="message-bubble">${message.content ? `<div class="message-text">${escapeHtml(message.content)}</div>` : ""}${attachment}</div>
-            <span class="message-meta"><time>${escapeHtml(formatTime(date.getTime()))}</time>${isMine ? readReceiptMarkup(peerReadAt >= date.getTime()) : ""}</span>
+            <span class="message-meta"><time>${escapeHtml(formatTime(date.getTime()))}</time>${isMine ? `${readReceiptMarkup(peerReadAt >= date.getTime())}<button class="message-delete-button" type="button" data-delete-message="${escapeHtml(String(message.id))}" aria-label="Delete your message${message.attachment_path ? " and attachment" : ""}" title="Delete message">Delete</button>` : ""}</span>
           </article>`);
       }
       if (activeChat !== renderedChat) {
@@ -1061,6 +1065,32 @@
     els.chatScreen.classList.toggle("mobile-chat-open", hasActiveChat);
     if (hasActiveChat) renderMessages();
     renderChats();
+  }
+
+  function updateConversationHistory(userId, push) {
+    const state = { kindredView: "conversation", userId };
+    try {
+      if (push) window.history.pushState(state, "");
+      else window.history.replaceState(state, "");
+      return true;
+    } catch (error) {
+      console.warn("Conversation back navigation isn't available for this page address.", error);
+      return false;
+    }
+  }
+
+  function leaveConversation() {
+    if (!activeChat) return;
+    stopTyping();
+    window.clearTimeout(remoteTypingTimer);
+    els.typingIndicator.hidden = true;
+    activeChat = "";
+    activeContact = null;
+    if (messageChannel) {
+      supabaseClient.removeChannel(messageChannel);
+      messageChannel = null;
+    }
+    showConversation();
   }
 
   function showChatScreen(email) {
@@ -1255,6 +1285,11 @@
     cloudProfile = null;
     activeChat = "";
     activeContact = null;
+    try {
+      window.history.replaceState({}, "", window.location.pathname + window.location.hash);
+    } catch (error) {
+      console.warn("The page address couldn't be reset after sign out.", error);
+    }
     profilesById.clear();
     if (messageChannel) {
       supabaseClient.removeChannel(messageChannel);
@@ -1298,6 +1333,7 @@
       showToast(error.message || "A conversation couldn't be opened.");
       return;
     }
+    updateConversationHistory(userId, !activeChat);
     stopTyping();
     window.clearTimeout(remoteTypingTimer);
     els.typingIndicator.hidden = true;
@@ -1341,6 +1377,48 @@
         }
       });
     els.messageInput.focus();
+  }
+
+  async function deleteMessage(messageId) {
+    if (!activeChat || !currentUserId || !messageId) return;
+    const row = [...els.messageList.querySelectorAll("[data-message-row]")]
+      .find((messageRow) => messageRow.dataset.messageRow === messageId);
+    if (!row || !row.classList.contains("is-mine")) return;
+    if (!window.confirm("Delete this message and its attachment for everyone in this conversation? This cannot be undone.")) return;
+    const conversationId = activeChat;
+    const deleteButton = row.querySelector("[data-delete-message]");
+    if (deleteButton) deleteButton.disabled = true;
+    const { data, error } = await supabaseClient.from("messages")
+      .delete()
+      .eq("id", messageId)
+      .eq("sender_id", currentUserId)
+      .eq("conversation_id", conversationId)
+      .select("id,attachment_path")
+      .maybeSingle();
+    if (error) {
+      console.error("Your message couldn't be deleted.", error);
+      showToast("This message couldn't be deleted. Run the latest supabase/schema.sql to enable message deletion.");
+      if (deleteButton) deleteButton.disabled = false;
+      return;
+    }
+    if (!data) {
+      showToast("That message was already deleted or you don't have permission to remove it.");
+      if (activeChat === conversationId) renderMessages();
+      return;
+    }
+    if (data.attachment_path) {
+      const { error: storageError } = await supabaseClient.storage
+        .from("kindred-chat-files")
+        .remove([data.attachment_path]);
+      if (storageError) {
+        console.error("The deleted message's attachment couldn't be removed from storage.", storageError);
+        showToast("Message deleted, but its stored attachment couldn't be removed.");
+      }
+    }
+    if (activeChat === conversationId) {
+      renderMessages();
+      renderChats();
+    }
   }
 
   async function handleFriendAction(button) {
@@ -1842,6 +1920,12 @@
     openConversation(button.dataset.userId);
   });
 
+  els.messageList.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-delete-message]");
+    if (!button) return;
+    deleteMessage(button.dataset.deleteMessage);
+  });
+
   els.peopleList.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-action]");
     if (!button) return;
@@ -1858,12 +1942,14 @@
   $("#empty-new-chat").addEventListener("click", () => setSidebarMode("people"));
   $("#welcome-new-chat").addEventListener("click", () => setSidebarMode("people"));
   $("#mobile-back-button").addEventListener("click", () => {
-    stopTyping();
-    window.clearTimeout(remoteTypingTimer);
-    els.typingIndicator.hidden = true;
-    activeChat = "";
-    activeContact = null;
-    showConversation();
+    if (window.history.state?.kindredView === "conversation") {
+      window.history.back();
+    } else {
+      leaveConversation();
+    }
+  });
+  window.addEventListener("popstate", (event) => {
+    if (activeChat && event.state?.kindredView !== "conversation") leaveConversation();
   });
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden && activeChat) renderMessages();

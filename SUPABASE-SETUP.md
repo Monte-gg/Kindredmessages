@@ -50,6 +50,14 @@ friend requests, private direct conversations, realtime text messages, read
 receipts, typing indicators, and private file attachments. Email search requires the exact email address; the
 matching member's email is never shown to other users. Re-run the full updated
 SQL in the Supabase SQL Editor to install these features.
+The latest schema also allows you to delete your own messages and attachments
+from a conversation; run the full schema again to enable the required
+permission. Use the **Delete** action beside one of your messages; its text and
+attachment are removed for both people in that conversation. Messages from
+other people cannot be deleted from your account. After running the SQL, also
+publish the latest `app.js`, `styles.css`, `index.html`, and
+`service-worker.js`; the SQL change alone cannot add the Delete button to the
+website.
 The updated schema also enables username editing from the account menu; the
 account email is displayed in Profile but is not editable there. Profile
 pictures are stored in the public `kindred-profile-pictures` bucket so member
