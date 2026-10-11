@@ -55,7 +55,9 @@
     sidebarHeading: $("#sidebar-heading"),
     messagesTab: $("#messages-tab"),
     peopleTab: $("#people-tab"),
+    callsTab: $("#calls-tab"),
     peopleList: $("#people-list"),
+    callsList: $("#calls-list"),
     peopleHint: $("#people-hint"),
     conversationEmpty: $("#conversation-empty"),
     activeConversation: $("#active-conversation"),
@@ -81,6 +83,12 @@
     callDeclineButton: $("#call-decline-button"),
     callHangupButton: $("#call-hangup-button"),
     messageList: $("#message-list"),
+    replyPreview: $("#reply-preview"),
+    replyPreviewTitle: $("#reply-preview-title"),
+    replyPreviewText: $("#reply-preview-text"),
+    cancelReplyButton: $("#cancel-reply-button"),
+    emojiButton: $("#emoji-button"),
+    emojiPicker: $("#emoji-picker"),
     typingIndicator: $("#typing-indicator"),
     typingLabel: $("#typing-label"),
     messageForm: $("#message-form"),
@@ -112,9 +120,19 @@
     profileEmail: $("#profile-email"),
     profileJoined: $("#profile-joined"),
     profilePhotoInput: $("#profile-photo-input"),
+    removeProfilePhotoButton: $("#remove-profile-photo-button"),
     profileError: $("#profile-error"),
     profileSaveButton: $("#profile-save-button"),
     closeProfileButton: $("#close-profile-button"),
+    forwardBackdrop: $("#forward-backdrop"),
+    forwardCopy: $("#forward-copy"),
+    forwardContact: $("#forward-contact"),
+    forwardError: $("#forward-error"),
+    forwardSendButton: $("#forward-send-button"),
+    closeForwardButton: $("#close-forward-button"),
+    updateBanner: $("#app-update-banner"),
+    applyAppUpdateButton: $("#apply-app-update-button"),
+    dismissAppUpdateButton: $("#dismiss-app-update-button"),
     signOutButton: $("#sign-out-button"),
     modalBackdrop: $("#modal-backdrop"),
     resetBackdrop: $("#reset-backdrop"),
@@ -145,12 +163,20 @@
   let sidebarMode = "messages";
   let selectedPhoto = "";
   let profileSelectedPhoto = "";
+  let profileRemovePhoto = false;
+  let replyTarget = null;
+  let forwardTarget = null;
   let pendingAttachment = null;
   let attachmentSending = false;
   let authMode = "login";
   let recoveryChallenge = null;
   let cloudProfile = null;
   const profilesById = new Map();
+  const messagesById = new Map();
+  const messageActionsById = new Map();
+  const profilePhotoUrlByPath = new Map();
+  const attachmentUrlCache = new Map();
+  const EMOJI_CHOICES = ["😀", "😂", "🥰", "😍", "😊", "👍", "👎", "❤️", "🎉", "🙏", "😭", "🔥", "✨", "😮", "🤔", "😎", "💯"];
   let toastTimer;
   let messageChannel = null;
   let presenceChannel = null;
@@ -158,6 +184,11 @@
   let callInboxChannel = null;
   let callRoomChannel = null;
   let activeCall = null;
+  let messagesRenderQueued = false;
+  let messagesRenderVersion = 0;
+  let messageToolsAvailable = true;
+  let warnedMessageSchema = false;
+  let callsLoadVersion = 0;
   let incomingCallQueue = Promise.resolve();
   let pendingIncomingCallId = "";
   let callAudioContext = null;
@@ -478,20 +509,84 @@
   }
 
   function setSidebarMode(mode) {
-    sidebarMode = mode;
+    sidebarMode = ["messages", "people", "calls"].includes(mode) ? mode : "messages";
     const showingPeople = mode === "people";
-    els.messagesTab.classList.toggle("is-active", !showingPeople);
-    els.messagesTab.setAttribute("aria-selected", String(!showingPeople));
+    const showingCalls = mode === "calls";
+    els.messagesTab.classList.toggle("is-active", mode === "messages");
+    els.messagesTab.setAttribute("aria-selected", String(mode === "messages"));
     els.peopleTab.classList.toggle("is-active", showingPeople);
     els.peopleTab.setAttribute("aria-selected", String(showingPeople));
-    els.sidebarHeading.firstChild.textContent = showingPeople ? "People " : "Messages ";
-    els.chatSearch.placeholder = showingPeople ? "Username or exact email" : "Find a conversation";
-    els.chatList.hidden = showingPeople;
+    els.callsTab.classList.toggle("is-active", showingCalls);
+    els.callsTab.setAttribute("aria-selected", String(showingCalls));
+    els.sidebarHeading.firstChild.textContent = showingPeople ? "People " : showingCalls ? "Recent calls " : "Messages ";
+    els.chatSearch.placeholder = showingPeople ? "Username or exact email" : showingCalls ? "Find a call" : "Find a conversation";
+    els.chatList.hidden = mode !== "messages";
     els.peopleList.hidden = !showingPeople;
+    els.callsList.hidden = !showingCalls;
     els.peopleHint.hidden = !showingPeople;
-    els.emptyList.hidden = showingPeople;
+    els.emptyList.hidden = showingPeople || showingCalls;
     if (showingPeople) renderPeople();
+    else if (showingCalls) renderCallHistory();
     else renderChats();
+  }
+
+  async function renderCallHistory() {
+    if (!currentUserId || sidebarMode !== "calls") return;
+    const request = ++callsLoadVersion;
+    els.callsList.innerHTML = '<p class="directory-status">Loading recent calls…</p>';
+    const { data: calls, error } = await supabaseClient.from("kindred_calls")
+      .select("id,conversation_id,caller_id,callee_id,status,created_at")
+      .or(`caller_id.eq.${currentUserId},callee_id.eq.${currentUserId}`)
+      .order("created_at", { ascending: false })
+      .limit(50);
+    if (request !== callsLoadVersion || sidebarMode !== "calls") return;
+    if (error) {
+      console.error("Recent calls couldn't be loaded.", error);
+      els.callsList.innerHTML = '<p class="directory-status">Recent calls couldn’t be loaded. Refresh and try again.</p>';
+      return;
+    }
+    const otherIds = [...new Set((calls || []).map((call) => (
+      call.caller_id === currentUserId ? call.callee_id : call.caller_id
+    )).filter((userId) => !profilesById.has(userId)))];
+    if (otherIds.length) {
+      const { data: profiles, error: profileError } = await supabaseClient.from("profiles")
+        .select("user_id,username,avatar_path,bio")
+        .in("user_id", otherIds);
+      if (profileError) {
+        console.error("Call participants couldn't be loaded.", profileError);
+        showToast("Some recent call names couldn't be loaded.");
+      } else {
+        (profiles || []).forEach((profile) => profilesById.set(profile.user_id, profile));
+      }
+    }
+    if (request !== callsLoadVersion || sidebarMode !== "calls") return;
+    const query = els.chatSearch.value.trim().toLocaleLowerCase();
+    const filteredCalls = (calls || []).filter((call) => {
+      const otherId = call.caller_id === currentUserId ? call.callee_id : call.caller_id;
+      return contactName(otherId).toLocaleLowerCase().includes(query);
+    });
+    if (!filteredCalls.length) {
+      els.callsList.innerHTML = `<p class="directory-status">${query ? "No calls match that name." : "Your recent calls will appear here."}</p>`;
+      return;
+    }
+    els.callsList.innerHTML = filteredCalls.map((call) => {
+      const incoming = call.callee_id === currentUserId;
+      const otherId = incoming ? call.caller_id : call.callee_id;
+      const statusText = call.status === "missed" || call.status === "ringing"
+        ? "Missed call"
+        : call.status === "declined" ? "Declined call"
+          : call.status === "accepted" || call.status === "ended" ? "Audio call"
+            : "Call";
+      return `<button class="call-history-item" type="button" role="listitem" data-call-user="${escapeHtml(otherId)}">
+        <span class="avatar chat-avatar" data-call-avatar="${escapeHtml(otherId)}"></span>
+        <span class="call-history-copy"><strong>${escapeHtml(contactName(otherId))}</strong><small class="${call.status === "missed" ? "is-missed" : ""}">${incoming ? "Incoming" : "Outgoing"} · ${statusText}</small></span>
+        <time>${escapeHtml(formatListTime(new Date(call.created_at).getTime()))}</time>
+      </button>`;
+    }).join("");
+    els.callsList.querySelectorAll("[data-call-avatar]").forEach((avatar) => {
+      const profile = profilesById.get(avatar.dataset.callAvatar);
+      setAvatar(avatar, profile?.user_id || avatar.dataset.callAvatar, profile || {});
+    });
   }
 
   function memberCard(profile, relationship = null) {
@@ -870,8 +965,17 @@
 
   async function createCallPeer() {
     if (!activeCall?.stream) throw new Error("Allow microphone access to start the call.");
+    const configuredIceServers = Array.isArray(window.KINDRED_TURN_SERVERS)
+      ? window.KINDRED_TURN_SERVERS.filter((server) => (
+        server && (typeof server.urls === "string" || Array.isArray(server.urls))
+      ))
+      : [];
     const peer = new RTCPeerConnection({
-      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      iceServers: [
+        { urls: "stun:stun.cloudflare.com:3478" },
+        { urls: "stun:stun.l.google.com:19302" },
+        ...configuredIceServers,
+      ],
     });
     activeCall.peer = peer;
     activeCall.queuedIce = [];
@@ -1232,16 +1336,8 @@
         console.error("The call status couldn't be saved.", error);
         showToast("The call ended, but its status couldn't be synchronized.");
       }
-      if (call.role === "caller") {
-        const { error: deleteError } = await supabaseClient.from("kindred_calls")
-          .delete()
-          .eq("id", call.id);
-        if (deleteError) {
-          console.error("The finished call record couldn't be removed.", deleteError);
-          showToast("The call ended, but its temporary call record couldn't be removed.");
-        }
-      }
     }
+    if (sidebarMode === "calls") renderCallHistory();
   }
 
   function updateNotificationsButton() {
@@ -1505,14 +1601,22 @@
 
   async function renderAttachment(message) {
     if (!message.attachment_path) return "";
-    const { data, error } = await supabaseClient.storage
-      .from("kindred-chat-files")
-      .createSignedUrl(message.attachment_path, 300);
-    if (error || !data?.signedUrl) {
-      if (error) console.error("A chat attachment could not be opened.", error);
+    let signedUrl = attachmentUrlCache.get(message.attachment_path);
+    if (!signedUrl || signedUrl.expiresAt <= Date.now()) {
+      const { data, error } = await supabaseClient.storage
+        .from("kindred-chat-files")
+        .createSignedUrl(message.attachment_path, 300);
+      if (error || !data?.signedUrl) {
+        if (error) console.error("A chat attachment could not be opened.", error);
+        return '<div class="attachment-missing">This attachment is unavailable.</div>';
+      }
+      signedUrl = { url: data.signedUrl, expiresAt: Date.now() + 240000 };
+      attachmentUrlCache.set(message.attachment_path, signedUrl);
+    }
+    if (!signedUrl?.url) {
       return '<div class="attachment-missing">This attachment is unavailable.</div>';
     }
-    const safeUrl = escapeHtml(data.signedUrl);
+    const safeUrl = escapeHtml(signedUrl.url);
     const safeName = escapeHtml(message.attachment_name || "Attachment");
     if (message.attachment_type.startsWith("image/")) {
       return `<a class="message-attachment image-attachment" href="${safeUrl}" target="_blank" rel="noopener"><img src="${safeUrl}" alt="${safeName}" loading="lazy"></a>`;
@@ -1588,34 +1692,123 @@
     typingStopTimer = window.setTimeout(stopTyping, 1500);
   }
 
-  async function renderMessages() {
+  function renderMessages() {
+    if (messagesRenderQueued) return;
+    messagesRenderQueued = true;
+    window.requestAnimationFrame(() => {
+      messagesRenderQueued = false;
+      renderMessagesNow();
+    });
+  }
+
+  function renderMessageActionsMarkup(message) {
+    if (!messageToolsAvailable) return "";
+    const actions = messageActionsById.get(String(message.id)) || [];
+    const reactions = new Map();
+    let pinned = false;
+    let starred = false;
+    actions.forEach((action) => {
+      if (action.reaction) {
+        const reaction = reactions.get(action.reaction) || { count: 0, own: false };
+        reaction.count += 1;
+        reaction.own ||= action.user_id === currentUserId;
+        reactions.set(action.reaction, reaction);
+      }
+      if (action.user_id === currentUserId) {
+        pinned = action.is_pinned;
+        starred = action.is_starred;
+      }
+    });
+    const reactionMarkup = [...reactions].map(([emoji, reaction]) => (
+      `<button class="message-reaction${reaction.own ? " is-own" : ""}" type="button" data-message-action="react" data-message-id="${escapeHtml(String(message.id))}" data-reaction="${escapeHtml(emoji)}" aria-label="${escapeHtml(`${emoji} ${reaction.count} reactions`)}">${emoji} <span>${reaction.count}</span></button>`
+    )).join("");
+    return `${reactionMarkup ? `<div class="message-reactions">${reactionMarkup}</div>` : ""}
+      <details class="message-actions">
+        <summary aria-label="Message actions" title="Message actions">⋯</summary>
+        <div class="message-actions-menu">
+          <button type="button" data-message-action="info" data-message-id="${escapeHtml(String(message.id))}">Message info</button>
+          <button type="button" data-message-action="reply" data-message-id="${escapeHtml(String(message.id))}">Reply</button>
+          <button type="button" data-message-action="copy" data-message-id="${escapeHtml(String(message.id))}">Copy</button>
+          <button type="button" data-message-action="react" data-message-id="${escapeHtml(String(message.id))}" data-reaction="👍">React 👍</button>
+          <button type="button" data-message-action="forward" data-message-id="${escapeHtml(String(message.id))}">Forward</button>
+          <button type="button" data-message-action="pin" data-message-id="${escapeHtml(String(message.id))}">${pinned ? "Unpin" : "Pin"}</button>
+          <button type="button" data-message-action="star" data-message-id="${escapeHtml(String(message.id))}">${starred ? "Remove star" : "Star"}</button>
+          ${message.sender_id === currentUserId ? `<button class="is-danger" type="button" data-message-action="delete" data-message-id="${escapeHtml(String(message.id))}">Delete</button>` : ""}
+        </div>
+      </details>`;
+  }
+
+  async function renderMessagesNow() {
     if (!activeChat || !activeContact) return;
+    const request = ++messagesRenderVersion;
     const renderedChat = activeChat;
     const contact = activeContact;
-    const { data: messages, error } = await supabaseClient
+    const wasNearBottom = els.messageList.scrollHeight - els.messageList.scrollTop - els.messageList.clientHeight < 90;
+    const oldScrollTop = els.messageList.scrollTop;
+    const enhancedSelect = "id,sender_id,content,created_at,attachment_path,attachment_name,attachment_type,attachment_size,reply_to_id,is_forwarded,reply_to:messages!messages_reply_to_id_fkey(id,sender_id,content,attachment_name,attachment_type)";
+    let { data: messages, error } = await supabaseClient
       .from("messages")
-      .select("id,sender_id,content,created_at,attachment_path,attachment_name,attachment_type,attachment_size")
+      .select(enhancedSelect)
       .eq("conversation_id", activeChat)
       .order("created_at", { ascending: true })
       .limit(1000);
+    if (error && ["42703", "PGRST200", "PGRST204"].includes(error.code)) {
+      messageToolsAvailable = false;
+      if (!warnedMessageSchema) {
+        warnedMessageSchema = true;
+        showToast("Run the latest supabase/schema.sql to enable message actions.");
+      }
+      ({ data: messages, error } = await supabaseClient.from("messages")
+        .select("id,sender_id,content,created_at,attachment_path,attachment_name,attachment_type,attachment_size")
+        .eq("conversation_id", activeChat)
+        .order("created_at", { ascending: true })
+        .limit(1000));
+    }
     if (error) {
       showToast(error.message || "Messages couldn't be loaded.");
       return;
     }
-    if (activeChat !== renderedChat) return;
+    if (activeChat !== renderedChat || request !== messagesRenderVersion) return;
     setAvatar(els.conversationAvatar, contact.user_id, contact);
     els.conversationTitle.textContent = contact.username;
     els.conversationEmail.dataset.presenceUser = contact.user_id;
     updateConversationPresenceStatus();
     if (!messages.length) {
+      messagesById.clear();
+      messageActionsById.clear();
       els.messageList.innerHTML = `<p class="message-empty">This is the beginning of your conversation. Say hello 👋</p>`;
       return;
+    }
+    messagesById.clear();
+    messages.forEach((message) => messagesById.set(String(message.id), message));
+    messageActionsById.clear();
+    if (messageToolsAvailable) {
+      const { data: messageActions, error: actionsError } = await supabaseClient.from("kindred_message_actions")
+        .select("message_id,user_id,reaction,is_pinned,is_starred")
+        .eq("conversation_id", renderedChat)
+        .in("message_id", messages.map((message) => message.id));
+      if (actionsError && ["42P01", "PGRST205"].includes(actionsError.code)) {
+        messageToolsAvailable = false;
+        if (!warnedMessageSchema) {
+          warnedMessageSchema = true;
+          showToast("Run the latest supabase/schema.sql to enable message actions.");
+        }
+      } else if (actionsError) {
+        console.error("Message reactions and saved actions couldn't be loaded.", actionsError);
+      } else {
+        (messageActions || []).forEach((action) => {
+          const key = String(action.message_id);
+          const items = messageActionsById.get(key) || [];
+          items.push(action);
+          messageActionsById.set(key, items);
+        });
+      }
     }
     const { data: members, error: membersError } = await supabaseClient
       .from("conversation_members")
       .select("user_id,last_read_at")
       .eq("conversation_id", renderedChat);
-    if (activeChat !== renderedChat) return;
+    if (activeChat !== renderedChat || request !== messagesRenderVersion) return;
     if (membersError) {
       console.error("Conversation read positions couldn't be loaded.", membersError);
       showToast("Read receipts are unavailable. Run the latest supabase/schema.sql.");
@@ -1639,18 +1832,26 @@
         }
         const isMine = message.sender_id === currentUserId;
         const attachment = await renderAttachment(message);
+        const reply = Array.isArray(message.reply_to) ? message.reply_to[0] : message.reply_to;
+        const quotedText = reply?.content?.trim() || reply?.attachment_name || (reply ? "Attachment" : "");
         renderedMessages.push(`${dayLabel ? `<div class="message-day">${escapeHtml(dayLabel)}</div>` : ""}
           <article class="message-row${isMine ? " is-mine" : ""}" data-message-row="${escapeHtml(String(message.id))}">
             ${!isMine ? `<span class="message-sender">${escapeHtml(contactName(message.sender_id))}</span>` : ""}
-            <div class="message-bubble">${message.content ? `<div class="message-text">${escapeHtml(message.content)}</div>` : ""}${attachment}</div>
-            <span class="message-meta"><time>${escapeHtml(formatTime(date.getTime()))}</time>${isMine ? `${readReceiptMarkup(peerReadAt >= date.getTime())}<button class="message-delete-button" type="button" data-delete-message="${escapeHtml(String(message.id))}" aria-label="Delete your message${message.attachment_path ? " and attachment" : ""}" title="Delete message">Delete</button>` : ""}</span>
+            <div class="message-bubble">
+              ${message.is_forwarded ? '<span class="message-forwarded">↗ Forwarded</span>' : ""}
+              ${reply ? `<div class="message-reply-quote"><strong>${escapeHtml(contactName(reply.sender_id))}</strong><span>${escapeHtml(quotedText)}</span></div>` : ""}
+              ${message.content ? `<div class="message-text">${escapeHtml(message.content)}</div>` : ""}${attachment}
+            </div>
+            <div class="message-meta"><time>${escapeHtml(formatTime(date.getTime()))}</time>${isMine ? readReceiptMarkup(peerReadAt >= date.getTime()) : ""}${renderMessageActionsMarkup(message)}</div>
           </article>`);
       }
-      if (activeChat !== renderedChat) {
+      if (activeChat !== renderedChat || request !== messagesRenderVersion) {
         return;
       }
       els.messageList.innerHTML = renderedMessages.join("");
-      els.messageList.scrollTop = els.messageList.scrollHeight;
+      els.messageList.scrollTop = wasNearBottom
+        ? els.messageList.scrollHeight
+        : Math.min(oldScrollTop, els.messageList.scrollHeight - els.messageList.clientHeight);
       if (!membersError && !document.hidden && ownMember) {
         const latestMessage = messages[messages.length - 1];
         const previousReadAt = readPositionByChat.get(renderedChat) || ownMember.last_read_at;
@@ -1796,13 +1997,19 @@
     els.profileBackdrop.hidden = true;
     els.profileError.textContent = "";
     profileSelectedPhoto = "";
+    profileRemovePhoto = false;
     els.profilePhotoInput.value = "";
+    els.removeProfilePhotoButton.disabled = false;
+    els.removeProfilePhotoButton.textContent = "Remove profile picture";
     els.accountButton.focus();
   }
 
   function restoreProfileAvatar() {
     profileSelectedPhoto = "";
+    profileRemovePhoto = false;
     els.profilePhotoInput.value = "";
+    els.removeProfilePhotoButton.disabled = false;
+    els.removeProfilePhotoButton.textContent = "Remove profile picture";
     setAvatar(els.profileAvatar, currentEmail, profileFor(readStore(), currentEmail));
   }
 
@@ -1854,18 +2061,21 @@
     els.profileError.textContent = "";
     let uploadedPath = "";
     const oldAvatarPath = cloudProfile.avatar_path || "";
+    let oldAvatarDeleteError = null;
     try {
       if (profileSelectedPhoto) uploadedPath = await uploadProfilePhoto(profileSelectedPhoto);
       const { data, error } = await supabaseClient.rpc("update_my_profile", {
         new_username: username,
         new_avatar_path: uploadedPath || null,
         new_bio: bio,
+        remove_avatar: profileRemovePhoto,
       });
       if (error) throw error;
       const savedUsername = data || username;
       cloudProfile.username = savedUsername;
       cloudProfile.bio = bio;
       if (uploadedPath) cloudProfile.avatar_path = uploadedPath;
+      if (profileRemovePhoto) cloudProfile.avatar_path = null;
       profilesById.set(currentUserId, {
         user_id: currentUserId,
         username: savedUsername,
@@ -1876,7 +2086,7 @@
       store.profiles[currentEmail] = {
         ...(store.profiles[currentEmail] || {}),
         username: savedUsername,
-        photo: profileSelectedPhoto || store.profiles[currentEmail]?.photo || "",
+        photo: profileRemovePhoto ? "" : profileSelectedPhoto || store.profiles[currentEmail]?.photo || "",
       };
       writeStore(store);
       els.accountName.textContent = savedUsername;
@@ -1884,17 +2094,19 @@
         username: savedUsername,
         avatar_path: cloudProfile.avatar_path,
       });
-      if (uploadedPath && oldAvatarPath && oldAvatarPath !== uploadedPath) {
+      if ((uploadedPath || profileRemovePhoto) && oldAvatarPath && oldAvatarPath !== uploadedPath) {
         const { error: removeError } = await supabaseClient.storage
           .from("kindred-profile-pictures").remove([oldAvatarPath]);
         if (removeError) {
           console.error("The previous profile picture couldn't be removed.", removeError);
-          showToast("Profile updated, but the previous picture couldn't be removed.");
+          oldAvatarDeleteError = removeError;
         }
       }
       els.profileUsername.value = savedUsername;
       closeProfile();
-      if (!uploadedPath || !oldAvatarPath || oldAvatarPath === uploadedPath) {
+      if (oldAvatarDeleteError) {
+        showToast("Profile updated, but the old picture couldn't be deleted from storage.");
+      } else {
         showToast("Your profile has been updated.");
       }
     } catch (error) {
@@ -2034,9 +2246,18 @@
         schema: "public",
         table: "conversation_members",
         filter: `conversation_id=eq.${conversationId}`,
-      }, () => {
+      }, ({ new: member }) => {
+        if (member?.user_id === currentUserId) return;
         renderMessages();
         renderChats();
+      })
+      .on("postgres_changes", {
+        event: "*",
+        schema: "public",
+        table: "kindred_message_actions",
+        filter: `conversation_id=eq.${conversationId}`,
+      }, () => {
+        renderMessages();
       })
       .on("broadcast", { event: "typing" }, ({ payload }) => {
         if (!payload || payload.user_id === currentUserId) return;
@@ -2260,22 +2481,185 @@
     });
   }
 
+  function setReplyTarget(message) {
+    replyTarget = message;
+    const reply = Array.isArray(message.reply_to) ? message.reply_to[0] : message.reply_to;
+    const senderId = reply?.sender_id || message.sender_id;
+    els.replyPreviewTitle.textContent = `Replying to ${contactName(senderId)}`;
+    els.replyPreviewText.textContent = message.content?.trim()
+      || message.attachment_name
+      || (message.attachment_type?.startsWith("image/") ? "Photo" : "Attachment");
+    els.replyPreview.hidden = false;
+    els.emojiPicker.hidden = true;
+    els.messageInput.focus();
+  }
+
+  function clearReplyTarget() {
+    replyTarget = null;
+    els.replyPreview.hidden = true;
+    els.replyPreviewText.textContent = "";
+  }
+
+  async function saveMessageAction(message, updates) {
+    if (!messageToolsAvailable || !activeChat || !message) {
+      showToast("Run the latest supabase/schema.sql to enable this message action.");
+      return;
+    }
+    const conversationId = activeChat;
+    const rows = messageActionsById.get(String(message.id)) || [];
+    const ownAction = rows.find((row) => row.user_id === currentUserId);
+    const nextAction = {
+      message_id: message.id,
+      conversation_id: conversationId,
+      user_id: currentUserId,
+      reaction: ownAction?.reaction ?? null,
+      is_pinned: ownAction?.is_pinned ?? false,
+      is_starred: ownAction?.is_starred ?? false,
+      ...updates,
+      updated_at: new Date().toISOString(),
+    };
+    try {
+      if (!nextAction.reaction && !nextAction.is_pinned && !nextAction.is_starred) {
+        if (!ownAction) return;
+        const { error } = await supabaseClient.from("kindred_message_actions")
+          .delete()
+          .eq("message_id", message.id)
+          .eq("user_id", currentUserId);
+        if (error) throw error;
+      } else {
+        const { error } = await supabaseClient.from("kindred_message_actions")
+          .upsert(nextAction, { onConflict: "message_id,user_id" });
+        if (error) throw error;
+      }
+      if (activeChat === conversationId) renderMessages();
+    } catch (error) {
+      console.error("A message reaction or saved action couldn't be updated.", error);
+      showToast(error.message || "This message action couldn't be saved.");
+    }
+  }
+
+  async function openForwardMessage(message) {
+    if (!messageToolsAvailable) {
+      showToast("Run the latest supabase/schema.sql to enable forwarding.");
+      return;
+    }
+    forwardTarget = message;
+    els.forwardCopy.textContent = message.content?.trim()
+      || message.attachment_name
+      || "This attachment";
+    els.forwardContact.replaceChildren();
+    els.forwardError.textContent = "";
+    els.forwardSendButton.disabled = true;
+    els.forwardBackdrop.hidden = false;
+    try {
+      const { data, error } = await supabaseClient.from("profiles")
+        .select("user_id,username,avatar_path,bio")
+        .neq("user_id", currentUserId)
+        .order("username", { ascending: true })
+        .limit(100);
+      if (error) throw error;
+      const profiles = data || [];
+      profiles.forEach((profile) => profilesById.set(profile.user_id, profile));
+      els.forwardContact.innerHTML = profiles.map((profile) => (
+        `<option value="${escapeHtml(profile.user_id)}">${escapeHtml(profile.username)}</option>`
+      )).join("");
+      els.forwardSendButton.disabled = !profiles.length;
+      if (!profiles.length) els.forwardError.textContent = "There are no other members to forward this to yet.";
+    } catch (error) {
+      console.error("The forwarding contact list couldn't be loaded.", error);
+      els.forwardError.textContent = error.message || "Contacts couldn't be loaded.";
+    }
+  }
+
+  async function forwardMessage() {
+    if (!forwardTarget || !els.forwardContact.value) return;
+    const message = forwardTarget;
+    const targetUserId = els.forwardContact.value;
+    els.forwardSendButton.disabled = true;
+    els.forwardError.textContent = "";
+    let attachmentPath = null;
+    try {
+      const { data: conversationId, error: conversationError } = await supabaseClient.rpc("create_direct_conversation", {
+        target_user_id: targetUserId,
+      });
+      if (conversationError) throw conversationError;
+      if (!conversationId) throw new Error("A conversation couldn't be opened.");
+      if (message.attachment_path) {
+        const { data: file, error: downloadError } = await supabaseClient.storage
+          .from("kindred-chat-files")
+          .download(message.attachment_path);
+        if (downloadError) throw downloadError;
+        const safeName = (message.attachment_name || "attachment").replace(/[^a-zA-Z0-9._-]/g, "_").slice(-120) || "attachment";
+        attachmentPath = `${conversationId}/${currentUserId}/${attachmentId()}-${safeName}`;
+        const { error: uploadError } = await supabaseClient.storage
+          .from("kindred-chat-files")
+          .upload(attachmentPath, file, {
+            contentType: message.attachment_type || "application/octet-stream",
+            upsert: false,
+          });
+        if (uploadError) throw uploadError;
+      }
+      const { error } = await supabaseClient.from("messages").insert({
+        conversation_id: conversationId,
+        sender_id: currentUserId,
+        content: message.content || null,
+        attachment_path: attachmentPath,
+        attachment_name: attachmentPath ? message.attachment_name : null,
+        attachment_type: attachmentPath ? message.attachment_type : null,
+        attachment_size: attachmentPath ? message.attachment_size : null,
+        is_forwarded: true,
+      });
+      if (error) throw error;
+      els.forwardBackdrop.hidden = true;
+      forwardTarget = null;
+      showToast("Message forwarded.");
+      renderChats();
+    } catch (error) {
+      if (attachmentPath) {
+        try {
+          const { error: cleanupError } = await supabaseClient.storage
+            .from("kindred-chat-files")
+            .remove([attachmentPath]);
+          if (cleanupError) console.error("The incomplete forwarded attachment couldn't be removed.", cleanupError);
+        } catch (cleanupError) {
+          console.error("The incomplete forwarded attachment couldn't be removed.", cleanupError);
+        }
+      }
+      console.error("The message couldn't be forwarded.", error);
+      els.forwardError.textContent = error.message || "The message couldn't be forwarded.";
+    } finally {
+      if (forwardTarget === message) els.forwardSendButton.disabled = false;
+    }
+  }
+
+  function showMessageInfo(message) {
+    const details = [
+      `Sent ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(message.created_at))}`,
+      message.attachment_name ? `File: ${message.attachment_name} (${formatFileSize(message.attachment_size || 0)})` : "",
+    ].filter(Boolean);
+    showToast(details.join(" · "));
+  }
+
   async function sendMessage(text) {
     const cleanText = text.trim();
     if (!cleanText || !activeChat) return;
     const conversationId = activeChat;
     const submittedText = cleanText;
+    const replyId = replyTarget && messageToolsAvailable ? replyTarget.id : null;
     els.sendButton.disabled = true;
     try {
-      const { error } = await supabaseClient.from("messages").insert({
+      const messagePayload = {
         conversation_id: conversationId,
         sender_id: currentUserId,
         content: cleanText,
-      });
+      };
+      if (messageToolsAvailable) messagePayload.reply_to_id = replyId;
+      const { error } = await supabaseClient.from("messages").insert(messagePayload);
       if (error) throw error;
       if (activeChat === conversationId && els.messageInput.value.trim() === submittedText) {
         els.messageInput.value = "";
         els.messageInput.style.height = "auto";
+        clearReplyTarget();
       }
       if (activeChat === conversationId) {
         renderMessages();
@@ -2626,6 +3010,9 @@
     }
     try {
       profileSelectedPhoto = await readPhoto(file);
+      profileRemovePhoto = false;
+      els.removeProfilePhotoButton.disabled = false;
+      els.removeProfilePhotoButton.textContent = "Remove profile picture";
       const store = readStore();
       setAvatar(els.profileAvatar, currentEmail, {
         ...profileFor(store, currentEmail),
@@ -2635,6 +3022,18 @@
       restoreProfileAvatar();
       els.profileError.textContent = error.message;
     }
+  });
+  els.removeProfilePhotoButton.addEventListener("click", () => {
+    profileSelectedPhoto = "";
+    profileRemovePhoto = true;
+    els.profilePhotoInput.value = "";
+    els.removeProfilePhotoButton.disabled = true;
+    els.removeProfilePhotoButton.textContent = "Picture will be removed when saved";
+    setAvatar(els.profileAvatar, currentEmail, {
+      username: cloudProfile?.username || currentEmail,
+      avatar_path: null,
+      photo: "",
+    });
   });
 
   els.themeToggle.addEventListener("click", () => {
@@ -2684,6 +3083,26 @@
     }
   });
 
+  els.emojiPicker.innerHTML = EMOJI_CHOICES.map((emoji) => (
+    `<button type="button" data-emoji="${emoji}" aria-label="${emoji}">${emoji}</button>`
+  )).join("");
+  els.emojiButton.addEventListener("click", () => {
+    els.emojiPicker.hidden = !els.emojiPicker.hidden;
+    els.emojiButton.setAttribute("aria-expanded", String(!els.emojiPicker.hidden));
+  });
+  els.emojiPicker.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-emoji]");
+    if (!button) return;
+    const start = els.messageInput.selectionStart;
+    const end = els.messageInput.selectionEnd;
+    els.messageInput.setRangeText(button.dataset.emoji, start, end, "end");
+    els.messageInput.dispatchEvent(new Event("input", { bubbles: true }));
+    els.emojiPicker.hidden = true;
+    els.emojiButton.setAttribute("aria-expanded", "false");
+    els.messageInput.focus();
+  });
+  els.cancelReplyButton.addEventListener("click", clearReplyTarget);
+
   els.chatList.addEventListener("click", (event) => {
     const button = event.target.closest("[data-chat][data-user-id]");
     if (!button) return;
@@ -2691,10 +3110,60 @@
   });
 
   els.messageList.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-delete-message]");
+    const button = event.target.closest("[data-message-action]");
     if (!button) return;
-    deleteMessage(button.dataset.deleteMessage);
+    const message = messagesById.get(button.dataset.messageId);
+    if (!message) return;
+    const details = button.closest("details");
+    if (details) details.open = false;
+    const actions = messageActionsById.get(String(message.id)) || [];
+    const ownAction = actions.find((action) => action.user_id === currentUserId);
+    const action = button.dataset.messageAction;
+    if (action === "delete") {
+      deleteMessage(button.dataset.messageId);
+    } else if (action === "reply") {
+      setReplyTarget(message);
+    } else if (action === "copy") {
+      navigator.clipboard.writeText(message.content || message.attachment_name || "Attachment")
+        .then(() => showToast("Message copied."))
+        .catch((error) => {
+          console.error("The message couldn't be copied.", error);
+          showToast("Copy isn't available in this browser.");
+        });
+    } else if (action === "forward") {
+      openForwardMessage(message);
+    } else if (action === "info") {
+      showMessageInfo(message);
+    } else if (action === "react") {
+      const reaction = button.dataset.reaction;
+      saveMessageAction(message, { reaction: ownAction?.reaction === reaction ? null : reaction });
+    } else if (action === "pin") {
+      saveMessageAction(message, { is_pinned: !ownAction?.is_pinned });
+    } else if (action === "star") {
+      saveMessageAction(message, { is_starred: !ownAction?.is_starred });
+    }
   });
+  els.callsList.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-call-user]");
+    if (button) openConversation(button.dataset.callUser);
+  });
+  document.addEventListener("click", (event) => {
+    if (!els.emojiPicker.contains(event.target) && !els.emojiButton.contains(event.target)) {
+      els.emojiPicker.hidden = true;
+      els.emojiButton.setAttribute("aria-expanded", "false");
+    }
+  });
+  els.closeForwardButton.addEventListener("click", () => {
+    els.forwardBackdrop.hidden = true;
+    forwardTarget = null;
+  });
+  els.forwardBackdrop.addEventListener("click", (event) => {
+    if (event.target === els.forwardBackdrop) {
+      els.forwardBackdrop.hidden = true;
+      forwardTarget = null;
+    }
+  });
+  els.forwardSendButton.addEventListener("click", forwardMessage);
 
   els.peopleList.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-action]");
@@ -2705,10 +3174,12 @@
   });
   els.chatSearch.addEventListener("input", () => {
     if (sidebarMode === "people") renderPeople();
+    else if (sidebarMode === "calls") renderCallHistory();
     else renderChats();
   });
   els.messagesTab.addEventListener("click", () => setSidebarMode("messages"));
   els.peopleTab.addEventListener("click", () => setSidebarMode("people"));
+  els.callsTab.addEventListener("click", () => setSidebarMode("calls"));
   $("#new-chat-button").addEventListener("click", () => setSidebarMode("people"));
   $("#empty-new-chat").addEventListener("click", () => setSidebarMode("people"));
   $("#welcome-new-chat").addEventListener("click", () => setSidebarMode("people"));

@@ -66,11 +66,18 @@ avatars can appear across devices. Only the signed-in owner can upload or
 remove pictures under their own user ID folder.
 Members can add a bio of up to 280 characters in Profile; it is visible to
 signed-in members. Open a member profile from the People list or a conversation
-header. Audio calls use browser microphone permission, Supabase Realtime for
-private call signaling, and a peer-to-peer WebRTC audio connection. Both people
-need to be online in Kindred and allow microphone access; calls require HTTPS.
-Some networks block direct peer-to-peer traffic and need a TURN relay service,
-which is not configured in this project.
+header. The latest schema adds replies, forwards, reactions, personal pinned
+and starred message markers, and recent-call history. It also allows removal of
+your profile picture. Re-run the complete schema to enable these features; it
+preserves conversation messages and call records.
+
+Audio calls use browser microphone permission, Supabase Realtime for private
+call signaling, and a peer-to-peer WebRTC audio connection. Both people need to
+be online in Kindred and allow microphone access; calls require HTTPS. Some
+networks block direct peer-to-peer traffic and need a TURN relay service, which
+is not configured in this project. A TURN provider must supply short-lived
+credentials through a trusted backend; do not put permanent TURN credentials
+in this public website's JavaScript.
 
 ## Install Kindred like an app
 
@@ -95,6 +102,8 @@ in Safari, tap **Share**, then **Add to Home Screen**. Messaging, sign-in, and
 file sharing still need an internet connection.
 Use **Refresh app** on the sign-in screen, or **Check for updates** in your
 account menu, to install the latest published version when one is available.
+When a newer version is found automatically, choose **Refresh now** to apply it
+or **Later** to keep using the current version until you're ready.
 
 ## Message and call notifications
 

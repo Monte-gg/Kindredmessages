@@ -3,16 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f7f8fa" />
+    <meta name="theme-color" content="#2563eb" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <title>Kindred — messages, made simple</title>
     <meta name="description" content="Kindred is a simple messaging app for chatting with friends and family. Create a free account with your own email address to send messages and files." />
-    <link rel="manifest" href="manifest.webmanifest" />
-    <link rel="icon" href="icons/kindred.svg" type="image/svg+xml" />
-    <link rel="apple-touch-icon" href="icons/kindred-192.png" />
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="manifest" href="manifest.webmanifest?v=11" />
+    <link rel="icon" href="icons/kindred.svg?v=11" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="icons/kindred-192.png?v=11" />
+    <link rel="stylesheet" href="styles.css?v=11" />
   </head>
   <body>
     <main id="app" class="app-shell">
@@ -117,9 +117,10 @@
               <h2 id="sidebar-heading">Messages <span id="chat-count" class="chat-count">0</span></h2>
             </div>
           </div>
-          <div class="sidebar-tabs" role="tablist" aria-label="Your conversations and members">
+          <div class="sidebar-tabs" role="tablist" aria-label="Your conversations, members, and calls">
             <button id="messages-tab" class="sidebar-tab is-active" type="button" role="tab" aria-selected="true">Messages</button>
             <button id="people-tab" class="sidebar-tab" type="button" role="tab" aria-selected="false">People</button>
+            <button id="calls-tab" class="sidebar-tab" type="button" role="tab" aria-selected="false">Calls</button>
           </div>
           <label class="search-box" for="chat-search">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8" /><path d="m16 16 4 4" /></svg>
@@ -129,6 +130,7 @@
           <p id="people-hint" class="people-hint" hidden>Search by username or exact email. Email addresses are never shown in results.</p>
           <div id="chat-list" class="chat-list" role="list" aria-label="Conversations"></div>
           <div id="people-list" class="chat-list people-list" role="list" aria-label="Kindred members" hidden></div>
+          <div id="calls-list" class="chat-list calls-list" role="list" aria-label="Recent calls" hidden></div>
           <div id="empty-list" class="empty-list">
             <div class="empty-list-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24"><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5 7.7 7.7 0 0 1-3.6-.9L4 20l1.9-4.1a7.5 7.5 0 1 1 14.1-4.4Z" /><path d="M8.5 11.5h.01M12.5 11.5h.01M16.5 11.5h.01" /></svg>
@@ -191,8 +193,14 @@
             </header>
             <div id="message-list" class="message-list" role="log" aria-live="polite" aria-label="Messages"></div>
             <p id="typing-indicator" class="typing-indicator" aria-live="polite" hidden><span class="typing-dots" aria-hidden="true"><i></i><i></i><i></i></span><span id="typing-label"></span></p>
+            <div id="reply-preview" class="reply-preview" hidden>
+              <span class="reply-preview-copy"><strong id="reply-preview-title">Replying</strong><span id="reply-preview-text"></span></span>
+              <button id="cancel-reply-button" class="icon-button" type="button" aria-label="Cancel reply" title="Cancel reply"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg></button>
+            </div>
+            <div id="emoji-picker" class="emoji-picker" role="group" aria-label="Choose an emoji" hidden></div>
             <form id="message-form" class="composer">
               <input id="attachment-input" class="visually-hidden" type="file" aria-label="Choose a photo, video, audio, or other file" />
+              <button id="emoji-button" class="icon-button emoji-button" type="button" aria-label="Choose emoji" title="Choose emoji">☺</button>
               <button id="attachment-button" class="icon-button attachment-button" type="button" aria-label="Attach a photo, video, audio, or file" title="Attach photo, video, audio, or file">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21.4 11.1-8.9 8.8a6 6 0 0 1-8.5-8.4l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5" /></svg>
               </button>
@@ -240,6 +248,7 @@
           <span id="profile-avatar" class="avatar profile-avatar"></span>
           <input id="profile-photo-input" class="visually-hidden" type="file" accept="image/*" aria-label="Choose a profile picture" />
           <label class="profile-photo-picker" for="profile-photo-input">Change profile picture</label>
+          <button id="remove-profile-photo-button" class="profile-photo-remove" type="button">Remove profile picture</button>
           <p class="profile-photo-hint">The full picture is fitted inside the preview so it stays clear and visible.</p>
           <p class="eyebrow">YOUR ACCOUNT</p>
           <h2 id="profile-title">Profile details</h2>
@@ -290,6 +299,22 @@
             <button id="call-accept-button" class="button button-primary" type="button">Accept call</button>
             <button id="call-enable-audio-button" class="call-enable-audio-button" type="button" hidden>Enable sound</button>
             <button id="call-hangup-button" class="call-end-button" type="button" hidden>End call</button>
+          </div>
+          <div id="forward-backdrop" class="modal-backdrop" hidden>
+            <section class="modal-card forward-card" role="dialog" aria-modal="true" aria-labelledby="forward-title">
+              <button id="close-forward-button" class="icon-button modal-close" type="button" aria-label="Close forward message">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
+              </button>
+              <p class="eyebrow">SHARE A MESSAGE</p>
+              <h2 id="forward-title">Forward message</h2>
+              <p id="forward-copy" class="modal-copy"></p>
+              <label for="forward-contact">Send to</label>
+              <div class="input-wrap">
+                <select id="forward-contact" aria-label="Choose a conversation"></select>
+              </div>
+              <p id="forward-error" class="form-error" role="alert"></p>
+              <button id="forward-send-button" class="button button-primary modal-submit" type="button">Forward message</button>
+            </section>
           </div>
         </section>
       </div>
@@ -371,10 +396,15 @@
         </div>
       </section>
     </div>
+    <div id="app-update-banner" class="app-update-banner" role="status" hidden>
+      <span>A Kindred update is ready.</span>
+      <button id="apply-app-update-button" type="button">Refresh now</button>
+      <button id="dismiss-app-update-button" type="button" aria-label="Dismiss update message">Later</button>
+    </div>
     <button id="install-app-button" class="install-app-button" type="button" hidden>Install Kindred</button>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.min.js" integrity="sha384-dl/4LkSyQ4uEucc48NM6VDZLAjLLq9yMzZ5JLXumBq7Ld33XBof73hseOqPhO89+" crossorigin="anonymous"></script>
     <script src="supabase-config.js"></script>
-    <script src="pwa.js?v=10"></script>
-    <script src="app.js"></script>
+    <script src="pwa.js?v=11"></script>
+    <script src="app.js?v=11"></script>
   </body>
 </html>

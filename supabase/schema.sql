@@ -94,6 +94,50 @@ create table if not exists public.messages (
 create index if not exists messages_conversation_created_idx
   on public.messages (conversation_id, created_at);
 
+alter table public.messages
+  add column if not exists reply_to_id bigint references public.messages(id) on delete set null;
+alter table public.messages
+  add column if not exists is_forwarded boolean not null default false;
+
+create or replace function public.validate_message_reply()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.reply_to_id is not null and not exists (
+    select 1
+    from public.messages as original
+    where original.id = new.reply_to_id
+      and original.conversation_id = new.conversation_id
+  ) then
+    raise exception 'A reply must refer to a message in the same conversation';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists validate_message_reply on public.messages;
+create trigger validate_message_reply
+  before insert or update of reply_to_id, conversation_id on public.messages
+  for each row execute function public.validate_message_reply();
+
+create table if not exists public.kindred_message_actions (
+  message_id bigint not null references public.messages(id) on delete cascade,
+  conversation_id uuid not null references public.conversations(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  reaction text check (reaction in ('👍', '❤️', '😂', '😮', '😢', '🙏')),
+  is_pinned boolean not null default false,
+  is_starred boolean not null default false,
+  updated_at timestamptz not null default now(),
+  primary key (message_id, user_id),
+  check (reaction is not null or is_pinned or is_starred)
+);
+
+create index if not exists kindred_message_actions_conversation_idx
+  on public.kindred_message_actions (conversation_id, message_id);
+
 create table if not exists public.kindred_calls (
   id uuid primary key default gen_random_uuid(),
   conversation_id uuid not null references public.conversations(id) on delete cascade,
@@ -104,6 +148,11 @@ create table if not exists public.kindred_calls (
   created_at timestamptz not null default now(),
   check (caller_id <> callee_id)
 );
+
+create index if not exists kindred_calls_caller_history_idx
+  on public.kindred_calls (caller_id, created_at desc);
+create index if not exists kindred_calls_callee_history_idx
+  on public.kindred_calls (callee_id, created_at desc);
 
 create table if not exists public.kindred_call_signals (
   id bigint generated always as identity primary key,
@@ -123,6 +172,7 @@ alter table public.conversations enable row level security;
 alter table public.conversation_members enable row level security;
 alter table public.friend_requests enable row level security;
 alter table public.messages enable row level security;
+alter table public.kindred_message_actions enable row level security;
 alter table public.kindred_calls enable row level security;
 alter table public.kindred_call_signals enable row level security;
 
@@ -134,10 +184,12 @@ create policy "Authenticated users can view member directory"
 
 drop function if exists public.update_my_profile(text);
 drop function if exists public.update_my_profile(text, text);
+drop function if exists public.update_my_profile(text, text, text);
 create or replace function public.update_my_profile(
   new_username text,
   new_avatar_path text default null,
-  new_bio text default null
+  new_bio text default null,
+  remove_avatar boolean default false
 )
 returns text
 language plpgsql
@@ -165,13 +217,16 @@ begin
   ) then
     raise exception 'Choose a valid profile picture before saving';
   end if;
+  if remove_avatar and new_avatar_path is not null then
+    raise exception 'Choose either a new picture or remove the current picture';
+  end if;
   if new_bio is not null and char_length(new_bio) > 280 then
     raise exception 'Your bio must be 280 characters or fewer';
   end if;
 
   update public.profiles
   set username = cleaned_username,
-      avatar_path = coalesce(new_avatar_path, avatar_path),
+      avatar_path = case when remove_avatar then null else coalesce(new_avatar_path, avatar_path) end,
       bio = coalesce(new_bio, bio)
   where user_id = auth.uid();
   if not found then
@@ -184,8 +239,8 @@ exception
 end;
 $$;
 
-revoke all on function public.update_my_profile(text, text, text) from public, anon;
-grant execute on function public.update_my_profile(text, text, text) to authenticated;
+revoke all on function public.update_my_profile(text, text, text, boolean) from public, anon;
+grant execute on function public.update_my_profile(text, text, text, boolean) to authenticated;
 
 create or replace function public.is_conversation_member(target_conversation_id uuid)
 returns boolean
@@ -204,6 +259,49 @@ $$;
 
 revoke all on function public.is_conversation_member(uuid) from public, anon;
 grant execute on function public.is_conversation_member(uuid) to authenticated;
+
+drop policy if exists "Members can view message actions" on public.kindred_message_actions;
+create policy "Members can view message actions"
+on public.kindred_message_actions for select to authenticated
+using (public.is_conversation_member(conversation_id));
+
+drop policy if exists "Members can add their own message actions" on public.kindred_message_actions;
+create policy "Members can add their own message actions"
+on public.kindred_message_actions for insert to authenticated
+with check (
+  user_id = (select auth.uid())
+  and public.is_conversation_member(conversation_id)
+  and exists (
+    select 1 from public.messages as message
+    where message.id = public.kindred_message_actions.message_id
+      and message.conversation_id = public.kindred_message_actions.conversation_id
+  )
+);
+
+drop policy if exists "Members can update their own message actions" on public.kindred_message_actions;
+create policy "Members can update their own message actions"
+on public.kindred_message_actions for update to authenticated
+using (
+  user_id = (select auth.uid())
+  and public.is_conversation_member(conversation_id)
+)
+with check (
+  user_id = (select auth.uid())
+  and public.is_conversation_member(conversation_id)
+  and exists (
+    select 1 from public.messages as message
+    where message.id = public.kindred_message_actions.message_id
+      and message.conversation_id = public.kindred_message_actions.conversation_id
+  )
+);
+
+drop policy if exists "Members can remove their own message actions" on public.kindred_message_actions;
+create policy "Members can remove their own message actions"
+on public.kindred_message_actions for delete to authenticated
+using (
+  user_id = (select auth.uid())
+  and public.is_conversation_member(conversation_id)
+);
 
 create or replace function public.create_kindred_call(target_conversation_id uuid)
 returns uuid
@@ -257,9 +355,6 @@ create policy "Call participants can update call status"
   );
 
 drop policy if exists "Call participants can delete call records" on public.kindred_calls;
-create policy "Call participants can delete call records"
-  on public.kindred_calls for delete to authenticated
-  using (caller_id = (select auth.uid()) or callee_id = (select auth.uid()));
 
 drop policy if exists "Call participants can read call signals" on public.kindred_call_signals;
 create policy "Call participants can read call signals"
@@ -503,6 +598,8 @@ grant execute on function public.create_direct_conversation(uuid) to authenticat
 
 grant select on table public.conversations, public.conversation_members, public.messages to authenticated;
 grant select, update (status), delete on table public.kindred_calls to authenticated;
+revoke delete on table public.kindred_calls from authenticated;
+grant select, insert, update, delete on table public.kindred_message_actions to authenticated;
 grant select, insert, delete on table public.kindred_call_signals to authenticated;
 grant insert on table public.messages to authenticated;
 grant delete on table public.messages to authenticated;
@@ -512,6 +609,8 @@ grant select on table public.conversations, public.conversation_members to authe
 grant update (last_read_at) on table public.conversation_members to authenticated;
 revoke all on table public.messages from anon, authenticated;
 grant select, insert, delete on table public.messages to authenticated;
+revoke all on table public.kindred_message_actions from anon, authenticated;
+grant select, insert, update, delete on table public.kindred_message_actions to authenticated;
 grant usage, select on sequence public.kindred_call_signals_id_seq to authenticated;
 revoke all on table public.friend_requests from anon, authenticated;
 grant select on table public.friend_requests to authenticated;
@@ -640,6 +739,15 @@ begin
       and tablename = 'kindred_call_signals'
   ) then
     alter publication supabase_realtime add table public.kindred_call_signals;
+  end if;
+  if not exists (
+    select 1
+    from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'kindred_message_actions'
+  ) then
+    alter publication supabase_realtime add table public.kindred_message_actions;
   end if;
 end;
 $$;
