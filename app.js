@@ -1844,19 +1844,25 @@
       els.resetCodeError.textContent = "Request a recovery code first.";
       return;
     }
-    const { error } = await supabaseClient.auth.verifyOtp({
-      email: recoveryChallenge.email,
-      token: els.resetCodeInput.value.trim(),
-      type: "recovery",
-    });
-    if (error) {
-      els.resetCodeError.textContent = error.message || "That code couldn't be verified.";
-      return;
+    const submitButton = els.resetCodeForm.querySelector('button[type="submit"]');
+    submitButton.disabled = true;
+    els.resetCodeError.textContent = "";
+    try {
+      const { error } = await supabaseClient.auth.verifyOtp({
+        email: recoveryChallenge.email,
+        token: els.resetCodeInput.value.trim(),
+        type: "recovery",
+      });
+      if (error) throw error;
+      recoveryChallenge.verified = true;
+      els.resetCodeStep.hidden = true;
+      els.resetPasswordStep.hidden = false;
+      window.setTimeout(() => els.resetPassword.focus(), 0);
+    } catch (error) {
+      els.resetCodeError.textContent = error.message || "That code couldn't be verified. Check your connection and try again.";
+    } finally {
+      submitButton.disabled = false;
     }
-    recoveryChallenge.verified = true;
-    els.resetCodeStep.hidden = true;
-    els.resetPasswordStep.hidden = false;
-    window.setTimeout(() => els.resetPassword.focus(), 0);
   });
 
   els.resetPasswordForm.addEventListener("submit", async (event) => {
