@@ -1125,15 +1125,7 @@
     };
   }
 
-  async function recordLogin() {
-    const { error } = await supabaseClient.rpc("record_login_event");
-    if (error) {
-      console.error("Login succeeded but its activity event could not be recorded.", error);
-      showToast("You’re signed in, but this login could not be added to the activity log.");
-    }
-  }
-
-  async function finishCloudLogin(user, logLogin = true) {
+  async function finishCloudLogin(user) {
     await loadCloudProfile(user);
     currentUserId = user.id;
     if (selectedPhoto && !cloudProfile.avatar_path) {
@@ -1169,7 +1161,6 @@
     startMessageNotifications();
     updateNotificationsButton();
     processPendingNotificationOpen();
-    if (logLogin) await recordLogin();
   }
 
   function closeProfile() {
@@ -1693,7 +1684,7 @@
           els.loginPassword.value = "";
           return;
         }
-        await finishCloudLogin(data.user, false);
+        await finishCloudLogin(data.user);
       } else {
         const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
         if (error) throw error;
@@ -2029,7 +2020,7 @@
   updateNotificationsButton();
   supabaseClient.auth.getSession().then(async ({ data, error }) => {
     if (error) throw error;
-    if (data.session?.user) await finishCloudLogin(data.session.user, false);
+    if (data.session?.user) await finishCloudLogin(data.session.user);
   }).catch((error) => {
     console.error("The saved account session could not be restored.", error);
     showToast("Your saved sign-in couldn't be restored. Please log in again.");

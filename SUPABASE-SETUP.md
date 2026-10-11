@@ -102,28 +102,7 @@ Push sender and VAPID setup; the app does not claim to provide closed-app push
 yet. The operating system controls notification styling, and its notification
 settings control lock-screen previews.
 
-## 2. Deploy the admin Edge Function
-
-Install the [Supabase CLI](https://supabase.com/docs/guides/cli/getting-started),
-then run these commands from this folder in PowerShell:
-
-```powershell
-supabase login
-supabase link --project-ref cpobteauoiptthjihhfl
-supabase functions deploy kindred-admin
-```
-
-In **Project Settings → API Keys**, copy the **service_role** secret and add it
-as the `SUPABASE_SERVICE_ROLE_KEY` Edge Function secret under the project's
-Edge Function secrets. Do not send or publish that secret. Supabase provides
-the project URL and anon key to deployed functions automatically.
-
-Kindred sign-in uses email and password directly through Supabase Auth; no
-username-login function or CLI deployment is needed for regular sign-in. The
-admin function checks the signed-in user's UUID against `app_admins` on every
-request and does not trust admin claims from the browser.
-
-## 3. Configure recovery codes by email
+## Configure recovery codes by email
 
 In **Authentication → Email Templates → Reset Password**, use the one-time
 token variable `{{ .Token }}` in the message, for example:
@@ -139,7 +118,7 @@ password. Configure an email provider under **Project Settings → Auth → SMTP
 Settings** before inviting other people; the default email sender is
 rate-limited and intended only for testing.
 
-## 4. Find members and chat
+## Find members and chat
 
 After running the updated schema, sign in and choose **People** in the
 left-hand sidebar. New members see recently joined suggestions, can search by
@@ -180,26 +159,3 @@ If you already clicked a confirmation link that goes to an unreachable
 address, it was generated using the old redirect settings. Fix the URL
 configuration and create/resend a confirmation email; the old link will still
 point at the old address.
-
-## 5. Grant your own account admin access
-
-First create and confirm your Kindred account. In the SQL Editor, substitute
-the email address of that account and run:
-
-```sql
-insert into public.app_admins (user_id)
-select id
-from auth.users
-where lower(email) = lower('your-account-email@your-domain.com')
-on conflict (user_id) do nothing;
-```
-
-You can then sign in at `admin.html`. Only UUIDs explicitly inserted into
-`app_admins` can view activity or suspend/restore accounts. Suspensions block
-sign-in while retaining the account and activity record; the admin page also
-records the administrator and suspension reason.
-
-Signup events are recorded by a database trigger. Successful logins are
-recorded by the signed-in app; passwords are never written to the activity
-table. The admin page displays up to the first 100 accounts and the most recent
-200 activity events.

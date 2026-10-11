@@ -11,22 +11,9 @@ alter table public.profiles
 create unique index if not exists profiles_username_lower_unique
   on public.profiles (lower(username));
 
-create table if not exists public.account_activity (
-  id bigint generated always as identity primary key,
-  user_id uuid references auth.users(id) on delete set null,
-  actor_user_id uuid references auth.users(id) on delete set null,
-  event_type text not null check (event_type in ('signup', 'login', 'suspended', 'restored')),
-  details jsonb not null default '{}'::jsonb,
-  created_at timestamptz not null default now()
-);
-
-create index if not exists account_activity_created_at_idx
-  on public.account_activity (created_at desc);
-
-create table if not exists public.app_admins (
-  user_id uuid primary key references auth.users(id) on delete cascade,
-  created_at timestamptz not null default now()
-);
+drop function if exists public.record_login_event();
+drop table if exists public.account_activity;
+drop table if exists public.app_admins;
 
 create table if not exists public.conversations (
   id uuid primary key default gen_random_uuid(),
@@ -93,8 +80,6 @@ create index if not exists messages_conversation_created_idx
   on public.messages (conversation_id, created_at);
 
 alter table public.profiles enable row level security;
-alter table public.account_activity enable row level security;
-alter table public.app_admins enable row level security;
 alter table public.conversations enable row level security;
 alter table public.conversation_members enable row level security;
 alter table public.friend_requests enable row level security;
@@ -515,9 +500,6 @@ begin
   insert into public.profiles (user_id, username)
   values (new.id, requested_username);
 
-  insert into public.account_activity (user_id, event_type, details)
-  values (new.id, 'signup', jsonb_build_object('username', requested_username));
-
   return new;
 end;
 $$;
@@ -563,26 +545,6 @@ select id, username
 from prepared_profiles
 on conflict (user_id) do nothing;
 
-create or replace function public.record_login_event()
-returns void
-language plpgsql
-security definer
-set search_path = ''
-as $$
-begin
-  if auth.uid() is null then
-    raise exception 'Authentication is required';
-  end if;
-
-  insert into public.account_activity (user_id, event_type)
-  values (auth.uid(), 'login');
-end;
-$$;
-
-revoke all on function public.record_login_event() from public, anon;
-grant execute on function public.record_login_event() to authenticated;
-revoke all on table public.account_activity from anon, authenticated;
-revoke all on table public.app_admins from anon, authenticated;
 revoke all on table public.profiles from anon;
 grant select on table public.profiles to authenticated;
 
