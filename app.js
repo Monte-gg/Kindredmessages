@@ -1807,7 +1807,7 @@
     const contact = activeContact;
     const wasNearBottom = els.messageList.scrollHeight - els.messageList.scrollTop - els.messageList.clientHeight < 90;
     const oldScrollTop = els.messageList.scrollTop;
-    const enhancedSelect = "id,sender_id,content,created_at,attachment_path,attachment_name,attachment_type,attachment_size,reply_to_id,is_forwarded,reply_to:messages!messages_reply_to_id_fkey(id,sender_id,content,attachment_name,attachment_type)";
+    const enhancedSelect = "id,sender_id,content,created_at,attachment_path,attachment_name,attachment_type,attachment_size,reply_to_id,is_forwarded";
     let { data: messages, error } = await supabaseClient
       .from("messages")
       .select(enhancedSelect)
@@ -1818,7 +1818,7 @@
       messageToolsAvailable = false;
       if (!warnedMessageSchema) {
         warnedMessageSchema = true;
-        showToast("Run the latest supabase/schema.sql to enable message actions.");
+        showToast("Supabase is returning an older message schema. Check that Kindred is using the project where you ran schema.sql, then refresh the Data API schema cache.");
       }
       ({ data: messages, error } = await supabaseClient.from("messages")
         .select("id,sender_id,content,created_at,attachment_path,attachment_name,attachment_type,attachment_size")
@@ -1845,6 +1845,25 @@
     messages.forEach((message) => messagesById.set(String(message.id), message));
     messageActionsById.clear();
     if (messageToolsAvailable) {
+      const replyIds = [...new Set(messages.map((message) => message.reply_to_id).filter(Boolean))];
+      if (replyIds.length) {
+        const { data: replies, error: repliesError } = await supabaseClient.from("messages")
+          .select("id,sender_id,content,attachment_name,attachment_type")
+          .eq("conversation_id", renderedChat)
+          .in("id", replyIds);
+        if (activeChat !== renderedChat || request !== messagesRenderVersion) return;
+        if (repliesError) {
+          console.error("Reply previews couldn't be loaded.", repliesError);
+        } else {
+          const repliesById = new Map((replies || []).map((reply) => [String(reply.id), reply]));
+          messages.forEach((message) => {
+            const reply = repliesById.get(String(message.reply_to_id));
+            if (reply) message.reply_to = reply;
+          });
+        }
+      }
+    }
+    if (messageToolsAvailable) {
       const { data: messageActions, error: actionsError } = await supabaseClient.from("kindred_message_actions")
         .select("message_id,user_id,reaction,is_pinned,is_starred")
         .eq("conversation_id", renderedChat)
@@ -1853,7 +1872,7 @@
         messageToolsAvailable = false;
         if (!warnedMessageSchema) {
           warnedMessageSchema = true;
-          showToast("Run the latest supabase/schema.sql to enable message actions.");
+          showToast("The message-actions table is missing from this Supabase project. Check that Kindred is using the project where you ran schema.sql.");
         }
       } else if (actionsError) {
         console.error("Message reactions and saved actions couldn't be loaded.", actionsError);
@@ -1873,7 +1892,9 @@
     if (activeChat !== renderedChat || request !== messagesRenderVersion) return;
     if (membersError) {
       console.error("Conversation read positions couldn't be loaded.", membersError);
-      showToast("Read receipts are unavailable. Run the latest supabase/schema.sql.");
+      showToast(membersError.code === "42703" || membersError.code === "PGRST204"
+        ? "Supabase hasn't refreshed the conversation read-receipt schema yet. Refresh the Data API schema cache."
+        : "Read receipts are temporarily unavailable. Your messages still work.");
     }
     const participantRows = members || [];
     const ownMember = participantRows.find((member) => member.user_id === currentUserId);
