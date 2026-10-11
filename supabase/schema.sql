@@ -111,7 +111,6 @@ alter table public.conversation_members enable row level security;
 alter table public.friend_requests enable row level security;
 alter table public.messages enable row level security;
 alter table public.kindred_calls enable row level security;
-alter table realtime.messages enable row level security;
 
 drop policy if exists "Users can view their own profile" on public.profiles;
 drop policy if exists "Authenticated users can view member directory" on public.profiles;
