@@ -28,6 +28,8 @@
     loginScreen: $("#login-screen"),
     chatScreen: $("#chat-screen"),
     themeToggle: $("#theme-toggle"),
+    refreshAppButton: $("#refresh-app-button"),
+    checkUpdatesButton: $("#check-updates-button"),
     loginForm: $("#login-form"),
     loginUsername: $("#login-username"),
     loginEmail: $("#login-email"),
@@ -1445,6 +1447,81 @@
     toastTimer = window.setTimeout(() => els.toast.classList.remove("is-visible"), 3200);
   }
 
+  async function checkForAppUpdates(button) {
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = "Checking…";
+    try {
+      if (!("serviceWorker" in navigator)) {
+        showToast("Refreshing Kindred.");
+        window.location.reload();
+        return;
+      }
+
+      const registration = await navigator.serviceWorker.ready;
+      const hadController = Boolean(navigator.serviceWorker.controller);
+      await registration.update();
+
+      if (registration.waiting) {
+        if (!hadController) {
+          window.location.reload();
+          return;
+        }
+        navigator.serviceWorker.addEventListener("controllerchange", () => {
+          window.location.reload();
+        }, { once: true });
+        registration.waiting.postMessage({ type: "SKIP_WAITING" });
+        return;
+      }
+
+      if (registration.installing) {
+        const installingWorker = registration.installing;
+        const workerState = await new Promise((resolve) => {
+          const timeout = window.setTimeout(() => {
+            installingWorker.removeEventListener("statechange", onStateChange);
+            resolve("timeout");
+          }, 15000);
+          const onStateChange = () => {
+            if (installingWorker.state === "installed" || installingWorker.state === "redundant") {
+              window.clearTimeout(timeout);
+              installingWorker.removeEventListener("statechange", onStateChange);
+              resolve(installingWorker.state);
+            }
+          };
+          installingWorker.addEventListener("statechange", onStateChange);
+          onStateChange();
+        });
+        if (workerState === "installed" && registration.waiting && hadController) {
+          navigator.serviceWorker.addEventListener("controllerchange", () => {
+            window.location.reload();
+          }, { once: true });
+          registration.waiting.postMessage({ type: "SKIP_WAITING" });
+          return;
+        }
+        if (workerState === "redundant") {
+          throw new Error("The update couldn't be installed. Check your connection and try again.");
+        }
+        if (workerState === "installed" && !hadController) {
+          window.location.reload();
+          return;
+        }
+        if (workerState === "timeout") {
+          throw new Error("The update is taking longer than expected. Try again when your connection is stronger.");
+        }
+      }
+
+      showToast("Kindred is up to date.");
+    } catch (error) {
+      console.error("Kindred couldn't check for app updates.", error);
+      showToast(error.message || "Kindred couldn't check for updates. Check your connection and try again.");
+    } finally {
+      if (button.isConnected) {
+        button.textContent = originalText;
+        button.disabled = false;
+      }
+    }
+  }
+
   function setTheme(theme, persist = true) {
     const isDark = theme === "dark";
     document.documentElement.dataset.theme = isDark ? "dark" : "light";
@@ -1474,18 +1551,26 @@
         const image = new Image();
         image.onerror = () => reject(new Error("This image couldn't be opened. Try another file."));
         image.onload = () => {
-          const maxSide = 256;
-          const scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
-          const canvas = document.createElement("canvas");
-          canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-          canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
-          const context = canvas.getContext("2d");
-          if (!context) {
-            reject(new Error("Your browser couldn't prepare this picture."));
-            return;
+          try {
+            const frameSize = 512;
+            const scale = Math.min(1, frameSize / image.naturalWidth, frameSize / image.naturalHeight);
+            const width = Math.max(1, Math.round(image.naturalWidth * scale));
+            const height = Math.max(1, Math.round(image.naturalHeight * scale));
+            const canvas = document.createElement("canvas");
+            canvas.width = frameSize;
+            canvas.height = frameSize;
+            const context = canvas.getContext("2d");
+            if (!context) {
+              reject(new Error("Your browser couldn't prepare this picture."));
+              return;
+            }
+            context.fillStyle = "#eef2f7";
+            context.fillRect(0, 0, frameSize, frameSize);
+            context.drawImage(image, (frameSize - width) / 2, (frameSize - height) / 2, width, height);
+            resolve(canvas.toDataURL("image/jpeg", 0.88));
+          } catch {
+            reject(new Error("Your browser couldn't prepare this picture. Try a smaller image."));
           }
-          context.drawImage(image, 0, 0, canvas.width, canvas.height);
-          resolve(canvas.toDataURL("image/jpeg", 0.82));
         };
         image.src = reader.result;
       };
@@ -1866,6 +1951,12 @@
 
   els.themeToggle.addEventListener("click", () => {
     setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+  });
+  els.refreshAppButton.addEventListener("click", () => checkForAppUpdates(els.refreshAppButton));
+  els.checkUpdatesButton.addEventListener("click", () => {
+    els.accountMenu.classList.remove("is-visible");
+    els.accountButton.setAttribute("aria-expanded", "false");
+    checkForAppUpdates(els.checkUpdatesButton);
   });
 
   els.messageForm.addEventListener("submit", (event) => {

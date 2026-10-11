@@ -5,9 +5,20 @@
   let installPrompt = null;
 
   if ("serviceWorker" in navigator && /^https?:$/.test(window.location.protocol)) {
-    navigator.serviceWorker.register("./service-worker.js").catch((error) => {
-      console.error("Kindred couldn't register its app support.", error);
-    });
+    const hadController = Boolean(navigator.serviceWorker.controller);
+    let refreshing = false;
+    if (hadController) {
+      navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (refreshing) return;
+        refreshing = true;
+        window.location.reload();
+      });
+    }
+    navigator.serviceWorker.register("./service-worker.js", { updateViaCache: "none" })
+      .then((registration) => registration.update())
+      .catch((error) => {
+        console.error("Kindred couldn't check for app updates.", error);
+      });
   }
 
   window.addEventListener("beforeinstallprompt", (event) => {

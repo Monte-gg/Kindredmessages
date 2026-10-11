@@ -21,6 +21,7 @@
         <svg class="theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.2 15.4A8.5 8.5 0 0 1 8.6 3.8 8.5 8.5 0 1 0 20.2 15.4Z" /></svg>
       </button>
       <section id="login-screen" class="login-screen" aria-labelledby="login-title">
+        <button id="refresh-app-button" class="refresh-app-button" type="button">Refresh app</button>
         <div class="login-card">
           <a class="brand brand-login" href="#" aria-label="Kindred home">
             <span class="brand-mark" aria-hidden="true">
@@ -145,6 +146,7 @@
             </button>
             <div id="account-menu" class="account-menu">
               <button id="profile-button" type="button">Profile</button>
+              <button id="check-updates-button" type="button">Check for updates</button>
               <button id="notifications-button" type="button">Enable notifications</button>
               <button id="sign-out-button" type="button">Sign out</button>
             </div>
@@ -232,6 +234,7 @@
           <span id="profile-avatar" class="avatar profile-avatar"></span>
           <input id="profile-photo-input" class="visually-hidden" type="file" accept="image/*" aria-label="Choose a profile picture" />
           <label class="profile-photo-picker" for="profile-photo-input">Change profile picture</label>
+          <p class="profile-photo-hint">The full picture is fitted inside the preview so it stays clear and visible.</p>
           <p class="eyebrow">YOUR ACCOUNT</p>
           <h2 id="profile-title">Profile details</h2>
           <p class="modal-copy">Your username is visible to other Kindred members. Your email stays private.</p>
@@ -331,7 +334,7 @@
     <button id="install-app-button" class="install-app-button" type="button" hidden>Install Kindred</button>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.min.js" integrity="sha384-dl/4LkSyQ4uEucc48NM6VDZLAjLLq9yMzZ5JLXumBq7Ld33XBof73hseOqPhO89+" crossorigin="anonymous"></script>
     <script src="supabase-config.js"></script>
-    <script src="pwa.js"></script>
+    <script src="pwa.js?v=7"></script>
     <script src="app.js"></script>
   </body>
 </html>

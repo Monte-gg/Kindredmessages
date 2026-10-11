@@ -85,6 +85,8 @@ On desktop Chrome or Edge, choose **Install Kindred** when the button appears,
 or use the browser's install option. On iPhone or iPad, open the HTTPS address
 in Safari, tap **Share**, then **Add to Home Screen**. Messaging, sign-in, and
 file sharing still need an internet connection.
+Use **Refresh app** on the sign-in screen, or **Check for updates** in your
+account menu, to install the latest published version when one is available.
 
 ## Message notifications
 
