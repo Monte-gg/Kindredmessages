@@ -902,8 +902,8 @@
     call.connectionTimeout = window.setTimeout(() => {
       if (activeCall !== call || call.connected || call.peer?.connectionState === "connected") return;
       showToast(call.turnUnavailableReason === "not-deployed"
-        ? "This call needs the TURN relay, but it isn't deployed in Supabase yet. Calls may work on the same Wi-Fi; mobile data needs the relay."
-        : "The call couldn't connect on this network. Check mobile-data coverage, call permissions, and TURN relay setup.");
+        ? "Both people are online, but this network blocks a direct call. Kindred's relay server still needs to be set up."
+        : "The call couldn't connect. Check both devices' internet and microphone permissions, then try again.");
       endCall(true, "missed").catch((error) => console.error("The unconnected call couldn't be closed.", error));
     }, 60000);
   }
@@ -999,9 +999,7 @@
       console.error("Kindred couldn't get temporary TURN credentials.", error);
       call.turnIceServers = [];
       call.turnUnavailableReason = error?.context?.status === 404 ? "not-deployed" : "unavailable";
-      showToast(call.turnUnavailableReason === "not-deployed"
-        ? "TURN relay isn't deployed in Supabase yet. Trying a direct call; calls on mobile data or restrictive networks may fail."
-        : "TURN relay is unavailable. Trying a direct call; calls on mobile data or restrictive networks may fail.");
+      console.info("Trying a direct call without TURN relay credentials.");
     }
     return call.turnIceServers;
   }
@@ -1071,8 +1069,8 @@
         }, 20000);
       } else if (peer.connectionState === "failed") {
         showToast(call.turnUnavailableReason === "not-deployed"
-          ? "This call needs the TURN relay, but it isn't deployed in Supabase yet. Calls may work on the same Wi-Fi; mobile data needs the relay."
-          : "The call couldn't connect on this network. Check mobile-data coverage, call permissions, and TURN relay setup.");
+          ? "Both people are online, but this network blocks a direct call. Kindred's relay server still needs to be set up."
+          : "The call couldn't connect. Check both devices' internet and microphone permissions, then try again.");
         endCall(true, call.connected ? "ended" : "missed")
           .catch((error) => console.error("The audio call could not be closed cleanly.", error));
       }
