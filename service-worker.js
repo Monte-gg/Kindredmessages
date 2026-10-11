@@ -1,4 +1,4 @@
-const CACHE_NAME = "kindred-shell-v9";
+const CACHE_NAME = "kindred-shell-v10";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -64,8 +64,11 @@ self.addEventListener("fetch", (event) => {
 self.addEventListener("notificationclick", (event) => {
   const notification = event.notification;
   const data = notification.data || {};
+  const incomingCall = data.type === "incoming-call";
+  const callId = data.callId;
   const userId = data.userId;
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId || "")) {
+  const validUuid = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value || "");
+  if (incomingCall ? !validUuid(callId) : !validUuid(userId)) {
     notification.close();
     return;
   }
@@ -76,16 +79,23 @@ self.addEventListener("notificationclick", (event) => {
     const appWindow = windows.find((client) => new URL(client.url).origin === self.location.origin);
     if (appWindow) {
       await appWindow.focus();
-      appWindow.postMessage({
-        type: "KINDRED_OPEN_CONVERSATION",
-        userId,
-        reply,
-      });
+      if (incomingCall) {
+        appWindow.postMessage({ type: "KINDRED_FOCUS_CALL", callId });
+      } else {
+        appWindow.postMessage({
+          type: "KINDRED_OPEN_CONVERSATION",
+          userId,
+          reply,
+        });
+      }
       return;
     }
     const url = new URL(data.url || "./", self.registration.scope);
-    url.searchParams.set("notificationUser", userId);
-    if (reply) url.searchParams.set("notificationReply", "1");
+    if (incomingCall) url.searchParams.set("incomingCall", callId);
+    else {
+      url.searchParams.set("notificationUser", userId);
+      if (reply) url.searchParams.set("notificationReply", "1");
+    }
     await self.clients.openWindow(url.href);
   })());
 });

@@ -354,13 +354,21 @@ body:has(.chat-screen:not([hidden])) .install-app-button { bottom: calc(82px + e
 .member-profile-bio { min-height: 30px; margin: 5px 0 18px; color: var(--text-muted); font-size: 12px; line-height: 1.6; text-align: center; white-space: pre-wrap; overflow-wrap: anywhere; }
 .call-card { text-align: center; }
 .call-card .modal-copy { min-height: 20px; }
+.call-backdrop.is-incoming .profile-avatar { animation: incoming-call-pulse 1.4s ease-in-out infinite; }
+@keyframes incoming-call-pulse {
+  50% { box-shadow: 0 0 0 12px rgb(63 132 99 / 13%); }
+}
 #call-remote-audio { display: none; }
-.call-actions { display: flex; justify-content: center; gap: 10px; margin-top: 22px; }
+.call-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 22px; }
 .call-actions button { min-height: 42px; padding: 0 17px; border-radius: 9px; cursor: pointer; font: inherit; font-size: 11px; font-weight: 700; }
 .call-actions .button-primary { border: 0; background: var(--green); color: white; }
 .call-end-button { border: 1px solid #e8c8ce; background: #fff4f6; color: #9c3048; }
 .call-end-button:hover { background: #f9e6eb; }
+.call-enable-audio-button { border: 1px solid var(--border); background: var(--surface-soft); color: var(--green-dark); }
 .call-actions button:disabled { cursor: wait; opacity: .6; }
+@media (prefers-reduced-motion: reduce) {
+  .call-backdrop.is-incoming .profile-avatar { animation: none; }
+}
 .modal-footnote { margin: 13px 0 0; color: #a0a8b0; font-size: 9px; text-align: center; line-height: 1.5; }
 .toast { position: fixed; z-index: 10; right: 20px; bottom: 20px; max-width: min(360px, calc(100% - 40px)); padding: 11px 16px; border-radius: 9px; background: #34443a; box-shadow: 0 8px 24px rgb(29 43 34 / 20%); color: white; font-size: 11px; opacity: 0; pointer-events: none; transform: translateY(8px); transition: opacity .2s, transform .2s; }
 .toast.is-visible { opacity: 1; transform: translateY(0); }

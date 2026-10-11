@@ -68,10 +68,9 @@ Members can add a bio of up to 280 characters in Profile; it is visible to
 signed-in members. Open a member profile from the People list or a conversation
 header. Audio calls use browser microphone permission, Supabase Realtime for
 private call signaling, and a peer-to-peer WebRTC audio connection. Both people
-need to be online in Kindred and allow microphone access; calls require HTTPS
-and may not connect on networks that block direct peer-to-peer traffic. Call
-invites and WebRTC signaling use participant-restricted database tables and
-Supabase Realtime; the schema adds those tables to the Realtime publication.
+need to be online in Kindred and allow microphone access; calls require HTTPS.
+Some networks block direct peer-to-peer traffic and need a TURN relay service,
+which is not configured in this project.
 
 ## Install Kindred like an app
 
@@ -97,21 +96,27 @@ file sharing still need an internet connection.
 Use **Refresh app** on the sign-in screen, or **Check for updates** in your
 account menu, to install the latest published version when one is available.
 
-## Message notifications
+## Message and call notifications
 
-After signing in, open the account menu and choose **Enable notifications**.
-Incoming messages then use the device's normal notification appearance while
-Kindred is open in a browser tab or installed app. The notification can open
-that conversation; its **Reply** action opens Kindred with the reply box ready.
-Browser notifications do not provide a portable text-entry field inside the
-system popup.
+After signing in, open the account menu and choose **Enable message & call
+alerts**. Incoming messages use the device's normal notification appearance,
+and incoming calls ring in Kindred and show a notification when permission is
+granted. Selecting a call notification opens Kindred so you can answer.
+Incoming call sound depends on browser audio permissions and the device's
+notification and sound settings.
 
-This version listens for messages over the live Supabase connection, so it
-cannot wake Kindred after the browser/app has been fully closed or its
-connection has stopped. Notifications in that state require a separate Web
-Push sender and VAPID setup; the app does not claim to provide closed-app push
-yet. The operating system controls notification styling, and its notification
-settings control lock-screen previews.
+On desktop Chrome or Edge, use **Install Kindred** when available to install
+the site as an app. On mobile, install it from the browser's app/home-screen
+menu. The operating system may show allowed notifications over other apps, but
+a website cannot force itself on top of other apps or control notification
+styling. Browser notifications do not provide a portable text-entry field
+inside the system popup.
+
+Notifications depend on Kindred's live Supabase connection and cannot wake the
+app after the browser/app has been fully closed or its connection has stopped.
+That requires a separate Web Push sender and VAPID setup, which is not
+configured in this project. The operating system controls notification
+styling, sound, vibration, and lock-screen previews.
 
 ## Configure recovery codes by email
 

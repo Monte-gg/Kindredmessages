@@ -76,6 +76,7 @@
     callTitle: $("#call-title"),
     callStatus: $("#call-status"),
     callRemoteAudio: $("#call-remote-audio"),
+    callEnableAudioButton: $("#call-enable-audio-button"),
     callAcceptButton: $("#call-accept-button"),
     callDeclineButton: $("#call-decline-button"),
     callHangupButton: $("#call-hangup-button"),
@@ -157,6 +158,9 @@
   let callInboxChannel = null;
   let callRoomChannel = null;
   let activeCall = null;
+  let incomingCallQueue = Promise.resolve();
+  let pendingIncomingCallId = "";
+  let callAudioContext = null;
   let pendingNotificationOpen = (() => {
     const params = new URLSearchParams(window.location.search);
     const userId = params.get("notificationUser");
@@ -684,9 +688,118 @@
     els.callStatus.textContent = status;
     els.callEyebrow.textContent = incoming ? "INCOMING AUDIO CALL" : "AUDIO CALL";
     els.callAcceptButton.hidden = !incoming;
+    els.callAcceptButton.disabled = incoming;
+    els.callEnableAudioButton.hidden = true;
     els.callDeclineButton.hidden = !incoming;
+    els.callDeclineButton.disabled = incoming;
     els.callHangupButton.hidden = incoming;
+    els.callBackdrop.classList.toggle("is-incoming", incoming);
     els.callBackdrop.hidden = false;
+  }
+
+  function stopIncomingCallAlert(call) {
+    if (call?.ringSource) {
+      call.ringSource.stop();
+      call.ringSource.disconnect();
+      call.ringSource = null;
+    }
+    if (call?.ringGain) {
+      call.ringGain.disconnect();
+      call.ringGain = null;
+    }
+    if (call?.role === "callee") navigator.vibrate?.(0);
+  }
+
+  async function closeCallNotification(callId) {
+    if (!("serviceWorker" in navigator)) return;
+    const registration = await navigator.serviceWorker.ready;
+    const notifications = await registration.getNotifications({ tag: `kindred-call-${callId}` });
+    notifications.forEach((notification) => notification.close());
+  }
+
+  async function showIncomingCallNotification(call) {
+    if (!notificationsEnabled || !("Notification" in window) || Notification.permission !== "granted") return;
+    const registration = await navigator.serviceWorker.ready;
+    await registration.showNotification(`${call.profile.username} is calling`, {
+      body: "Incoming audio call — open Kindred to answer.",
+      icon: "./icons/kindred-192.png",
+      badge: "./icons/kindred-192.png",
+      tag: `kindred-call-${call.id}`,
+      renotify: true,
+      silent: false,
+      vibrate: [350, 120, 350, 700],
+      data: {
+        type: "incoming-call",
+        callId: call.id,
+        userId: call.callerId,
+        url: "./",
+      },
+    });
+  }
+
+  async function unlockCallSound() {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return;
+    try {
+      if (!callAudioContext || callAudioContext.state === "closed") {
+        callAudioContext = new AudioContextClass();
+      }
+      if (callAudioContext.state === "suspended") await callAudioContext.resume();
+    } catch (error) {
+      console.info("Call sound couldn't be enabled by this browser.", error);
+    }
+  }
+
+  function startIncomingCallAlert(call) {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (AudioContextClass) {
+      try {
+        if (!callAudioContext || callAudioContext.state === "closed") {
+          callAudioContext = new AudioContextClass();
+        }
+        const sampleRate = callAudioContext.sampleRate;
+        const buffer = callAudioContext.createBuffer(1, sampleRate * 2, sampleRate);
+        const samples = buffer.getChannelData(0);
+        for (let index = 0; index < samples.length; index += 1) {
+          const time = index / sampleRate;
+          const pulseTime = time % 2;
+          const firstPulse = pulseTime < 0.42 ? Math.min(1, pulseTime * 35, (0.42 - pulseTime) * 35) : 0;
+          const secondPulse = pulseTime >= 0.62 && pulseTime < 1.04
+            ? Math.min(1, (pulseTime - 0.62) * 35, (1.04 - pulseTime) * 35)
+            : 0;
+          const envelope = Math.max(firstPulse, secondPulse);
+          samples[index] = envelope * (Math.sin(2 * Math.PI * 440 * time) + Math.sin(2 * Math.PI * 480 * time)) * 0.16;
+        }
+        const source = callAudioContext.createBufferSource();
+        const gain = callAudioContext.createGain();
+        source.buffer = buffer;
+        source.loop = true;
+        gain.gain.value = 0.7;
+        source.connect(gain);
+        gain.connect(callAudioContext.destination);
+        call.ringSource = source;
+        call.ringGain = gain;
+        source.start();
+        callAudioContext.resume().catch((error) => {
+          console.info("Incoming call sound needs a browser interaction to start.", error);
+        });
+      } catch (error) {
+        console.error("The incoming call sound couldn't be started.", error);
+      }
+    }
+    navigator.vibrate?.([350, 120, 350, 700]);
+    showIncomingCallNotification(call).catch((error) => {
+      console.error("An incoming call notification couldn't be shown.", error);
+    });
+  }
+
+  function startCallConnectionTimeout(call) {
+    window.clearTimeout(call.connectionTimeout);
+    call.connectionTimeout = window.setTimeout(() => {
+      if (activeCall !== call || call.peer?.connectionState === "connected") return;
+      showToast("The call couldn't connect. Your network may need a TURN relay.");
+      endCall(true, "missed").catch((error) => console.error("The unconnected call couldn't be closed.", error));
+    }, 30000);
   }
 
   async function setCallStatus(status) {
@@ -718,18 +831,41 @@
       table: "kindred_call_signals",
       filter: `call_id=eq.${callId}`,
     }, ({ new: signal }) => {
-      if (!activeCall || activeCall.id !== signal.call_id || signal.sender_id === currentUserId) return;
-      handleCallSignal(signal.event, {
+      processCallSignal(signal);
+    });
+    return channel;
+  }
+
+  function processCallSignal(signal) {
+    const call = activeCall;
+    if (!call || call.id !== signal.call_id || signal.sender_id === currentUserId) return Promise.resolve();
+    call.signalIds ||= new Set();
+    if (call.signalIds.has(signal.id)) return call.signalQueue;
+    call.signalIds.add(signal.id);
+    call.signalQueue = call.signalQueue.then(async () => {
+      if (activeCall !== call) return;
+      await handleCallSignal(signal.event, {
         ...signal.payload,
         call_id: signal.call_id,
         user_id: signal.sender_id,
-      }).catch((error) => {
-        console.error("Kindred audio call signaling failed.", error);
-        showToast(error.message || "The call couldn't connect.");
-        endCall(true).catch((endError) => console.error("The audio call could not be closed cleanly.", endError));
       });
+    }).catch((error) => {
+      console.error("Kindred audio call signaling failed.", error);
+      showToast(error.message || "The call couldn't connect.");
+      if (activeCall === call) {
+        endCall(true).catch((endError) => console.error("The audio call could not be closed cleanly.", endError));
+      }
     });
-    return channel;
+    return call.signalQueue;
+  }
+
+  async function replayCallSignals(callId) {
+    const { data, error } = await supabaseClient.from("kindred_call_signals")
+      .select("id,call_id,sender_id,event,payload")
+      .eq("call_id", callId)
+      .order("id", { ascending: true });
+    if (error) throw error;
+    for (const signal of data || []) await processCallSignal(signal);
   }
 
   async function createCallPeer() {
@@ -750,13 +886,18 @@
     };
     peer.ontrack = (event) => {
       els.callRemoteAudio.srcObject = event.streams[0] || new MediaStream([event.track]);
-      els.callRemoteAudio.play().catch((error) => console.info("Tap the page to hear the audio call.", error));
+      els.callRemoteAudio.play().catch((error) => {
+        console.info("The browser blocked audio playback for this call.", error);
+        els.callEnableAudioButton.hidden = false;
+        els.callStatus.textContent = "Connected. Tap Enable sound to hear the call.";
+      });
     };
     peer.onconnectionstatechange = () => {
       if (!activeCall || activeCall.peer !== peer) return;
       if (peer.connectionState === "connected") {
         window.clearTimeout(activeCall.ringTimeout);
         window.clearTimeout(activeCall.connectionTimeout);
+        stopIncomingCallAlert(activeCall);
         els.callStatus.textContent = "Connected";
       } else if (peer.connectionState === "disconnected") {
         window.clearTimeout(activeCall.connectionTimeout);
@@ -767,7 +908,7 @@
           }
         }, 8000);
       } else if (peer.connectionState === "failed") {
-        showToast("The call couldn't connect. Your network may block direct audio calls.");
+          showToast("The call couldn't connect. Your network may need a TURN relay.");
         endCall(true).catch((error) => console.error("The audio call could not be closed cleanly.", error));
       }
     };
@@ -777,13 +918,27 @@
   async function handleCallSignal(event, payload) {
     if (!activeCall) return;
     if (event === "ready" && activeCall.role === "caller") {
+      const call = activeCall;
+      window.clearTimeout(activeCall.ringTimeout);
       els.callStatus.textContent = "Connecting…";
-      activeCall.stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      startCallConnectionTimeout(call);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      if (activeCall !== call) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      call.stream = stream;
       const peer = await createCallPeer();
       const offer = await peer.createOffer();
       await peer.setLocalDescription(offer);
       const status = await sendCallSignal("offer", { description: peer.localDescription });
       if (status !== "ok") throw new Error("The call offer couldn't be sent. Try again.");
+      return;
+    }
+    if (event === "ready" && activeCall.role === "callee") {
+      activeCall.callerReady = true;
+      els.callStatus.textContent = "Incoming call";
+      els.callAcceptButton.disabled = false;
       return;
     }
     if (event === "offer" && activeCall.role === "callee") {
@@ -823,58 +978,99 @@
     }
   }
 
-  async function handleIncomingCall(payload) {
-    if (!payload || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(payload.id || "")) return;
-    const { data: call, error } = await supabaseClient.from("kindred_calls")
-      .select("id,caller_id,callee_id,status")
-      .eq("id", payload.id)
-      .maybeSingle();
-    if (error) {
-      console.error("An incoming audio call couldn't be checked.", error);
-      return;
+  function handleIncomingCall(payload) {
+    const callId = payload?.id;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(callId || "")) {
+      return Promise.resolve();
     }
-    if (!call || call.callee_id !== currentUserId || call.status !== "ringing") return;
-    if (activeCall) {
-      const { error: signalError } = await supabaseClient.from("kindred_call_signals").insert({
-        call_id: call.id,
-        sender_id: currentUserId,
-        event: "declined",
-        payload: {},
-      });
-      const { error: statusError } = await supabaseClient.from("kindred_calls")
-        .update({ status: "declined" })
-        .eq("id", call.id);
-      if (signalError || statusError) {
-        const error = signalError || statusError;
-        console.error("A busy response couldn't be sent to the caller.", error);
-        showToast(error.message || "The incoming call couldn't be declined.");
-      }
-      return;
-    }
-    const { data: profile, error: profileError } = await supabaseClient.from("profiles")
-      .select("user_id,username,avatar_path,bio")
-      .eq("user_id", call.caller_id)
-      .maybeSingle();
-    if (profileError || !profile) {
-      if (profileError) console.error("The caller profile couldn't be loaded.", profileError);
-      return;
-    }
-    profilesById.set(profile.user_id, profile);
-    activeCall = { id: call.id, role: "callee", profile, callerId: call.caller_id, queuedIce: [] };
-    const channel = createCallRoom(call.id);
-    setCallScreen(profile, "Someone is calling you.", true);
+    const task = incomingCallQueue.then(() => handleIncomingCallNow(payload));
+    incomingCallQueue = task.catch((error) => {
+      console.error("The incoming call couldn't be handled.", error);
+      showToast(error.message || "An incoming call couldn't be opened.");
+    });
+    return task;
+  }
+
+  async function handleIncomingCallNow(payload) {
+    const callId = payload?.id;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(callId || "")
+      || activeCall?.id === callId || pendingIncomingCallId === callId) return;
+    pendingIncomingCallId = callId;
     try {
+      const { data: call, error } = await supabaseClient.from("kindred_calls")
+        .select("id,caller_id,callee_id,status")
+        .eq("id", callId)
+        .maybeSingle();
+      if (error) throw error;
+      if (!call || call.callee_id !== currentUserId || call.status !== "ringing") return;
+      if (activeCall) {
+        const { error: signalError } = await supabaseClient.from("kindred_call_signals").insert({
+          call_id: call.id,
+          sender_id: currentUserId,
+          event: "declined",
+          payload: {},
+        });
+        const { error: statusError } = await supabaseClient.from("kindred_calls")
+          .update({ status: "declined" })
+          .eq("id", call.id);
+        if (signalError || statusError) {
+          const busyError = signalError || statusError;
+          console.error("A busy response couldn't be sent to the caller.", busyError);
+          showToast(busyError.message || "The incoming call couldn't be declined.");
+        }
+        return;
+      }
+      const { data: profile, error: profileError } = await supabaseClient.from("profiles")
+        .select("user_id,username,avatar_path,bio")
+        .eq("user_id", call.caller_id)
+        .maybeSingle();
+      if (profileError) throw profileError;
+      if (!profile) throw new Error("The caller's profile couldn't be loaded.");
+      profilesById.set(profile.user_id, profile);
+      activeCall = {
+        id: call.id,
+        role: "callee",
+        profile,
+        callerId: call.caller_id,
+        queuedIce: [],
+        signalQueue: Promise.resolve(),
+        signalIds: new Set(),
+      };
+      const currentCall = activeCall;
+      const channel = createCallRoom(call.id);
+      setCallScreen(profile, "Incoming call", true);
+      startIncomingCallAlert(currentCall);
       await subscribeRealtimeChannel(channel);
-      activeCall.ringTimeout = window.setTimeout(() => {
-        if (activeCall?.id !== call.id || activeCall.role !== "callee") return;
+      if (activeCall !== currentCall) return;
+      els.callDeclineButton.disabled = false;
+      await replayCallSignals(call.id);
+      if (activeCall !== currentCall) return;
+      currentCall.ringTimeout = window.setTimeout(() => {
+        if (activeCall !== currentCall || currentCall.role !== "callee") return;
         showToast("The incoming call ended because it wasn't answered.");
         endCall(false, "missed").catch((error) => console.error("The unanswered incoming call couldn't be closed.", error));
       }, 40000);
     } catch (error) {
       console.error("The incoming audio call could not connect.", error);
       showToast(error.message || "The incoming call couldn't connect.");
-      await endCall(false);
+      if (activeCall?.id === callId) await endCall(false);
+    } finally {
+      if (pendingIncomingCallId === callId) pendingIncomingCallId = "";
     }
+  }
+
+  async function recoverIncomingCall() {
+    if (!currentUserId || activeCall || pendingIncomingCallId) return;
+    const since = new Date(Date.now() - 60000).toISOString();
+    const { data, error } = await supabaseClient.from("kindred_calls")
+      .select("id,caller_id,callee_id,status")
+      .eq("callee_id", currentUserId)
+      .eq("status", "ringing")
+      .gte("created_at", since)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    if (error) throw error;
+    if (data?.[0]) await handleIncomingCall(data[0]);
   }
 
   async function startCallInbox() {
@@ -896,6 +1092,7 @@
     });
     try {
       await subscribeRealtimeChannel(channel);
+      await recoverIncomingCall();
     } catch (error) {
       console.error("The Kindred call inbox could not connect.", error);
       showToast(error.message || "Audio calls aren't available. Run the latest supabase/schema.sql.");
@@ -918,10 +1115,20 @@
       });
       if (error) throw error;
       const profile = activeContact;
-      activeCall = { id: callId, role: "caller", profile, queuedIce: [] };
+      activeCall = {
+        id: callId,
+        role: "caller",
+        profile,
+        queuedIce: [],
+        signalQueue: Promise.resolve(),
+        signalIds: new Set(),
+      };
       const room = createCallRoom(callId);
       setCallScreen(profile, "Calling…");
       await subscribeRealtimeChannel(room);
+      await replayCallSignals(callId);
+      await sendCallSignal("ready");
+      els.callStatus.textContent = "Ringing…";
       activeCall.ringTimeout = window.setTimeout(() => {
         if (activeCall?.id !== callId) return;
         showToast(`${profile.username} didn't answer.`);
@@ -938,19 +1145,33 @@
 
   async function acceptAudioCall() {
     if (!activeCall || activeCall.role !== "callee") return;
+    if (!activeCall.callerReady) {
+      showToast("Connecting to the caller. Please wait a moment.");
+      return;
+    }
     if (!navigator.mediaDevices?.getUserMedia || !window.RTCPeerConnection) {
       showToast("Audio calls need a supported browser and a secure HTTPS connection.");
       await endCall(true, "declined");
       return;
     }
+    const call = activeCall;
     els.callAcceptButton.disabled = true;
     try {
-      window.clearTimeout(activeCall.ringTimeout);
-      activeCall.stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      window.clearTimeout(call.ringTimeout);
+      stopIncomingCallAlert(call);
+      closeCallNotification(call.id).catch((error) => console.error("The call notification couldn't be closed.", error));
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      if (activeCall !== call) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      call.stream = stream;
       await createCallPeer();
+      if (activeCall !== call) return;
       await setCallStatus("accepted");
       const status = await sendCallSignal("ready");
       if (status !== "ok") throw new Error("The call acceptance couldn't be sent.");
+      startCallConnectionTimeout(call);
       els.callStatus.textContent = "Connecting…";
       els.callAcceptButton.hidden = true;
       els.callDeclineButton.hidden = true;
@@ -965,9 +1186,12 @@
 
   async function endCall(notifyPeer = true, status = "ended") {
     const call = activeCall;
-    if (!call) return;
+    if (!call || call.ending) return;
+    call.ending = true;
     window.clearTimeout(call.ringTimeout);
     window.clearTimeout(call.connectionTimeout);
+    stopIncomingCallAlert(call);
+    closeCallNotification(call.id).catch((error) => console.error("The call notification couldn't be closed.", error));
     if (notifyPeer && callRoomChannel) {
       try {
         const { error } = await supabaseClient.from("kindred_call_signals").insert({
@@ -986,6 +1210,7 @@
     if (call.stream) call.stream.getTracks().forEach((track) => track.stop());
     if (call.peer) call.peer.close();
     els.callRemoteAudio.srcObject = null;
+    els.callEnableAudioButton.hidden = true;
     els.callBackdrop.hidden = true;
     if (callRoomChannel) {
       const channel = callRoomChannel;
@@ -1032,8 +1257,8 @@
     }
     els.notificationsButton.disabled = false;
     els.notificationsButton.textContent = notificationsEnabled
-      ? "Pause notifications"
-      : Notification.permission === "granted" ? "Turn on notifications" : "Enable notifications";
+      ? "Pause message & call alerts"
+      : Notification.permission === "granted" ? "Turn on message & call alerts" : "Enable message & call alerts";
   }
 
   async function enableNotifications() {
@@ -1041,6 +1266,7 @@
       showToast("This browser doesn't support Kindred notifications.");
       return;
     }
+    await unlockCallSound();
     let permission = Notification.permission;
     if (permission === "default") permission = await Notification.requestPermission();
     if (permission !== "granted") {
@@ -1057,7 +1283,7 @@
       console.error("Notification preference couldn't be saved.", error);
     }
     updateNotificationsButton();
-    showToast("Notifications are on while Kindred is open.");
+    showToast("Message and call alerts are on while Kindred is open.");
   }
 
   async function handleNotificationMessage(message) {
@@ -2497,7 +2723,12 @@
     if (activeChat && event.state?.kindredView !== "conversation") leaveConversation();
   });
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && activeChat) renderMessages();
+    if (!document.hidden) {
+      if (activeChat) renderMessages();
+      recoverIncomingCall().catch((error) => {
+        console.error("An incoming call couldn't be recovered after returning to Kindred.", error);
+      });
+    }
   });
   els.accountButton.addEventListener("click", () => {
     const isOpen = els.accountMenu.classList.toggle("is-visible");
@@ -2516,6 +2747,15 @@
   });
   els.audioCallButton.addEventListener("click", startAudioCall);
   els.callAcceptButton.addEventListener("click", acceptAudioCall);
+  els.callEnableAudioButton.addEventListener("click", async () => {
+    try {
+      await els.callRemoteAudio.play();
+      els.callEnableAudioButton.hidden = true;
+    } catch (error) {
+      console.error("Call audio playback is still blocked.", error);
+      showToast("Audio is blocked by your browser or device. Check your sound settings and try again.");
+    }
+  });
   els.callDeclineButton.addEventListener("click", async () => {
     if (!activeCall) return;
     if (activeCall.role === "callee") {
@@ -2545,7 +2785,8 @@
     openConversation(userId);
   });
   els.notificationsButton.addEventListener("click", async () => {
-    if (notificationsEnabled && Notification.permission === "granted") {
+    await unlockCallSound();
+    if ("Notification" in window && notificationsEnabled && Notification.permission === "granted") {
       notificationsEnabled = false;
       try {
         localStorage.setItem("kindred.notifications.disabled", "true");
@@ -2592,6 +2833,22 @@
   });
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.addEventListener("message", (event) => {
+      if (event.data?.type === "KINDRED_FOCUS_CALL") {
+        const callId = event.data.callId;
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(callId || "")) return;
+        const focusCall = () => {
+          if (activeCall?.id !== callId) return false;
+          els.callBackdrop.focus();
+          if (activeCall.role === "callee" && !els.callAcceptButton.disabled) els.callAcceptButton.focus();
+          return true;
+        };
+        if (!focusCall()) {
+          recoverIncomingCall().then(focusCall).catch((error) => {
+            console.error("The incoming call notification couldn't be opened.", error);
+          });
+        }
+        return;
+      }
       if (event.data?.type !== "KINDRED_OPEN_CONVERSATION") return;
       const userId = event.data.userId;
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId || "")) return;
@@ -2599,6 +2856,9 @@
       processPendingNotificationOpen();
     });
   }
+
+  document.addEventListener("pointerdown", unlockCallSound, { once: true });
+  document.addEventListener("keydown", unlockCallSound, { once: true });
 
   let preferredTheme = "light";
   try {

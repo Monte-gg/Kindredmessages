@@ -279,7 +279,7 @@
         </section>
       </div>
       <div id="call-backdrop" class="modal-backdrop" hidden>
-        <section class="modal-card call-card" role="dialog" aria-modal="true" aria-labelledby="call-title">
+        <section class="modal-card call-card" role="dialog" aria-modal="true" aria-labelledby="call-title" tabindex="-1">
           <span id="call-avatar" class="avatar profile-avatar"></span>
           <p class="eyebrow" id="call-eyebrow">AUDIO CALL</p>
           <h2 id="call-title"></h2>
@@ -288,6 +288,7 @@
           <div class="call-actions">
             <button id="call-decline-button" class="call-end-button" type="button">Decline</button>
             <button id="call-accept-button" class="button button-primary" type="button">Accept call</button>
+            <button id="call-enable-audio-button" class="call-enable-audio-button" type="button" hidden>Enable sound</button>
             <button id="call-hangup-button" class="call-end-button" type="button" hidden>End call</button>
           </div>
         </section>
@@ -373,7 +374,7 @@
     <button id="install-app-button" class="install-app-button" type="button" hidden>Install Kindred</button>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.min.js" integrity="sha384-dl/4LkSyQ4uEucc48NM6VDZLAjLLq9yMzZ5JLXumBq7Ld33XBof73hseOqPhO89+" crossorigin="anonymous"></script>
     <script src="supabase-config.js"></script>
-    <script src="pwa.js?v=9"></script>
+    <script src="pwa.js?v=10"></script>
     <script src="app.js"></script>
   </body>
 </html>
